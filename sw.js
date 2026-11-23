@@ -1,13 +1,11 @@
 // Guarda o app no celular para abrir sem internet.
-const CACHE = 'suu-v1';
+// Com internet, sempre busca a versão nova da página primeiro (assim as atualizações aparecem na hora).
+const CACHE = 'suu-v2';
 const FB = 'https://www.gstatic.com/firebasejs/13.4.0/';
-const SHELL = [
-  './', './index.html', './manifest.json', './icon-192.png', './icon-512.png',
-  FB + 'firebase-app.js', FB + 'firebase-auth.js', FB + 'firebase-firestore.js'
-];
+const SHELL = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -26,19 +24,27 @@ self.addEventListener('fetch', e => {
   const estatico = url.href.startsWith(FB) || url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
   if (!doApp && !estatico) return; // dados e login vão direto pro Firebase
 
-  // Abre na hora com o que está guardado e atualiza por trás (bom pra internet ruim).
+  if (doApp) {
+    // Página e arquivos do app: rede primeiro (sem cache do navegador); sem internet, usa a cópia guardada.
+    e.respondWith(
+      fetch(req, { cache: 'no-store' }).then(res => {
+        if (res && res.ok) { const c = res.clone(); caches.open(CACHE).then(cache => cache.put(req, c)); }
+        return res;
+      }).catch(async () => {
+        const cache = await caches.open(CACHE);
+        return (await cache.match(req, { ignoreSearch: true })) || (req.mode === 'navigate' ? cache.match('./index.html') : new Response('', { status: 504 }));
+      })
+    );
+    return;
+  }
+  // Bibliotecas do Firebase e fontes: não mudam, então usa a cópia guardada.
   e.respondWith(
     caches.open(CACHE).then(async cache => {
-      const guardado = await cache.match(req, { ignoreSearch: doApp });
-      const rede = fetch(req).then(res => {
-        if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone());
-        return res;
-      }).catch(() => null);
-      if (guardado) { e.waitUntil(rede); return guardado; }
-      const res = await rede;
-      if (res) return res;
-      if (req.mode === 'navigate') return cache.match('./index.html');
-      return new Response('', { status: 504 });
+      const guardado = await cache.match(req);
+      if (guardado) return guardado;
+      const res = await fetch(req).catch(() => null);
+      if (res && (res.ok || res.type === 'opaque')) cache.put(req, res.clone());
+      return res || new Response('', { status: 504 });
     })
   );
 });
