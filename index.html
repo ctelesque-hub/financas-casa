@@ -39,6 +39,7 @@ body{min-height:100vh;padding-bottom:calc(84px + env(safe-area-inset-bottom))}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 input,select{font:inherit;color:var(--ink);background:var(--surface2);border:1px solid transparent;border-radius:12px;padding:12px 14px;width:100%;outline:none;-webkit-appearance:none;appearance:none}
 input:focus,select:focus{border-color:var(--accent)}
+.janela select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .muted{color:var(--muted)} .small{font-size:.85rem}
 .num{font-variant-numeric:tabular-nums}
@@ -350,9 +351,11 @@ function gerarContas() {
   if (!S.carregado.contas || !S.config) return;
   const meses = new Set([mesAtual()]);
   if (S.mes > mesAtual()) meses.add(S.mes);
+  const inicio = S.config.inicioContas || "";
   S.config.categorias.forEach(c => {
     if (c.ativo === false || c.tipo !== "Fixa" || !c.dia) return;
     meses.forEach(ym => {
+      if (ym < inicio) return; // contas fixas só a partir do mês escolhido em Ajustes
       const id = `${ym}_${c.id}`;
       if (S.contas.some(x => x.id === id)) return;
       const nova = { mes: ym, catId: c.id, nome: c.nome, venc: dataNoMes(ym, c.dia), previsto: +c.previsto || 0 };
@@ -679,6 +682,7 @@ function telaAjustes() {
   const op = (v, ic, nome, sub) => `<button class="item" data-a="sub" data-v="${v}"><span class="ic">${ic}</span><span class="meio"><span class="nome">${nome}</span><span class="sub">${sub}</span></span><span class="seta">›</span></button>`;
   return `<section class="opcoes">
     ${op("categorias", "🏷️", "Categorias", `${c.categorias.filter(x => x.ativo !== false).length} ativas`)}
+    ${op("inicio", "📅", "Início das contas fixas", c.inicioContas ? "A partir de " + nomeMes(c.inicioContas) : "Desde o mês atual")}
     ${op("formas", "💳", "Formas de pagamento", "Cartões, Flash, Pix e outras")}
     ${op("flash", "⚡", "Saldo do Flash", c.flashSaldo?.[mesAtual()] ? brl(c.flashSaldo[mesAtual()]) + " neste mês" : "Informe o saldo do mês")}
     ${op("fontes", "💰", "Fontes de entrada", c.fontes.map(f => f.nome).join(", "))}
@@ -701,6 +705,14 @@ function subtela() {
     const sem = c.categorias.filter(x => !x.excluida && (!c.tipos.includes(x.tipo) || x.tipo === "Parcela"));
     if (sem.length) h += `<section class="card"><h2>Sem tipo</h2><div class="lista">${sem.map(x => `<button class="item" data-a="editar-cat" data-v="${x.id}"><span class="ic">${esc(x.icone)}</span><span class="meio"><span class="nome">${esc(x.nome)}</span></span><span class="seta">›</span></button>`).join("")}</div></section>`;
     return h + `<button class="btn cheio" data-a="editar-cat" data-v="">Nova categoria</button>`;
+  }
+  if (S.sub === "inicio") {
+    const atual = c.inicioContas || mesAtual(), ms = []; for (let i = -1; i <= 12; i++) ms.push(addMes(mesAtual(), i));
+    if (!ms.includes(atual)) ms.unshift(atual);
+    return volta + `<section class="card"><h2>Início das contas fixas</h2>
+      <div class="campo"><label>As contas fixas aparecem em Contas a partir de</label><select id="ini-mes">${ms.map(m => `<option value="${m}" ${m === atual ? "selected" : ""}>${nomeMes(m)}</option>`).join("")}</select></div>
+      <p class="muted small">Contas fixas de meses anteriores que ainda estão em aberto saem de Contas. As que já foram pagas continuam no histórico.</p>
+      <button class="btn cheio" data-a="salvar-inicio">Salvar</button></section>`;
   }
   if (S.sub === "formas") {
     return volta + `<section class="card"><div class="lista">${c.formas.map(f => `<button class="item" data-a="editar-forma" data-v="${f.id}" style="${f.ativo === false ? "opacity:.5" : ""}">
@@ -790,109 +802,90 @@ function catsOrdenadas() {
   S.lancamentos.forEach(l => { if (l.data >= desde) uso[l.catId] = (uso[l.catId] || 0) + 1; });
   return S.config.categorias.filter(c => c.ativo !== false).sort((a, b) => (uso[b.id] || 0) - (uso[a.id] || 0) || a.nome.localeCompare(b.nome));
 }
+/* ---- Formulário de lançamento: texto rápido + campos em lista (sem grade de ícones) ---- */
+const normT = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const valorTxt = c => c ? (c / 100).toFixed(2).replace(".", ",") : "";
 function desenharForm(j) {
-  const F = S.form, rol = j.querySelector(".rolar"), pos = rol ? rol.scrollTop : 0;
-  const editando = F.editId || F.editEntradaId;
+  const F = S.form, editando = F.editId || F.editEntradaId;
+  const opt = (v, txt, on) => `<option value="${esc(v)}" ${on ? "selected" : ""}>${esc(txt)}</option>`;
   let h = `<div class="jtopo">${editando || F.contaId ? `<h3 style="flex:1;margin:0">${F.contaId ? "Pagar conta" : editando && F.modo === "gasto" ? "Editar gasto" : "Editar entrada"}</h3>`
     : `<div class="seg"><button data-f="modo" data-v="gasto" class="${F.modo === "gasto" ? "on" : ""}">Gasto</button><button data-f="modo" data-v="entrada" class="${F.modo === "entrada" ? "on" : ""}">Entrada</button></div>`}
-    <button class="fechar" data-fechar="1" aria-label="Fechar">✕</button></div>
-    <input class="valor num ${F.cents ? "" : "zero"}" id="f-valor" inputmode="numeric" autocomplete="off" aria-label="Valor" value="${brl(F.cents / 100)}"><div class="rolar">`;
+    <button class="fechar" data-fechar="1" aria-label="Fechar">✕</button></div><div class="rolar">`;
+  if (!editando && !F.contaId) h += `<div class="campo"><label>Escreva rápido</label><input id="f-rapido" autocomplete="off" placeholder="${F.modo === "gasto" ? "Ex.: 500 mercado" : "Ex.: 5500 salário"}"></div>`;
+  h += `<div class="campos"><div class="campo"><label>Valor (R$)</label><input id="f-valor" inputmode="decimal" autocomplete="off" value="${valorTxt(F.cents)}" placeholder="0,00"></div>
+    <div class="campo"><label>Data</label><input type="date" id="f-data" value="${esc(F.data)}"></div></div>`;
   if (F.modo === "gasto") {
-    const sug = formaSugerida(F.data);
-    h += `<div class="rot">Categoria <span style="font-weight:500">(segure pra ajustar)</span></div><div class="grade">${catsOrdenadas().map(c =>
-      `<button class="cat ${F.catId === c.id ? "on" : ""}" data-cat="${c.id}"><span class="e">${esc(c.icone || "•")}</span>${esc(c.nome)}</button>`).join("")}
-      <button class="cat" data-f="nova-cat"><span class="e">＋</span>Nova</button></div>
-      <div class="rot">Forma de pagamento</div><div class="chips">${S.config.formas.filter(f => f.ativo !== false).map(f =>
-        `<button class="chip ${F.forma === f.id ? "on" : ""}" data-f="forma" data-v="${f.id}">${esc(f.nome)}${sug && sug.id === f.id ? "<small>hoje</small>" : ""}</button>`).join("")}</div>
-      <div class="rot">Quem pagou</div><div class="quem">${QUEM.map(q => `<button class="${q === "Camila" ? "c" : "k"} ${F.pagoPor === q ? "on" : ""}" data-f="pago" data-v="${q}">${q}</button>`).join("")}</div>
-      <div class="rot">De quem é</div><div class="chips">${RESP.map(r => `<button class="chip ${F.resp === r ? "on" : ""}" data-f="resp" data-v="${r}">${r}</button>`).join("")}</div>`;
-    if (!editando && !F.contaId) h += `<div class="rot">Parcelas</div><div class="passo"><button data-f="parc" data-v="-1" aria-label="Menos">−</button><b>${F.parcelas}</b><button data-f="parc" data-v="1" aria-label="Mais">+</button>
-      <span class="muted small" id="f-parc-txt">${F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : "à vista"}</span></div>`;
+    const tipos = S.config.tipos.filter(t => t !== "Parcela"), cats = S.config.categorias.filter(c => c.ativo !== false || c.id === F.catId);
+    const grupos = tipos.map(t => { const cs = cats.filter(c => c.tipo === t).sort((a, b) => a.nome.localeCompare(b.nome)); return cs.length ? `<optgroup label="${esc(t)}">${cs.map(c => opt(c.id, c.nome, c.id === F.catId)).join("")}</optgroup>` : ""; }).join("");
+    const outras = cats.filter(c => !tipos.includes(c.tipo)).map(c => opt(c.id, c.nome, c.id === F.catId)).join("");
+    h += `<div class="campo"><label>Categoria</label><select id="f-cat">${opt("", "Escolha…", !F.catId)}${grupos}${outras}${opt("__nova", "+ Nova categoria", false)}</select></div>
+      <div class="campos"><div class="campo"><label>Pago com</label><select id="f-forma">${S.config.formas.filter(f => f.ativo !== false || f.id === F.forma).map(f => opt(f.id, f.nome, f.id === F.forma)).join("")}</select></div>
+      <div class="campo"><label>Quem pagou</label><select id="f-pago">${QUEM.map(q => opt(q, q, q === F.pagoPor)).join("")}</select></div></div>
+      <div class="campos"><div class="campo"><label>De quem é</label><select id="f-resp">${RESP.map(r => opt(r, r, r === F.resp)).join("")}</select></div>
+      ${!editando && !F.contaId ? `<div class="campo"><label>Parcelas</label><input id="f-parc" type="number" min="1" max="48" inputmode="numeric" value="${F.parcelas}"></div>` : "<div></div>"}</div>
+      <p class="muted small" id="f-parc-txt" style="margin:-4px 0 8px">${F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : ""}</p>`;
   } else {
-    h += `<div class="rot">De onde veio</div><div class="chips">${S.config.fontes.map(f => `<button class="chip ${F.fonteId === f.id ? "on" : ""}" data-f="fonte" data-v="${f.id}">${esc(f.nome)}</button>`).join("")}</div>
-      <div class="rot">Quem recebeu</div><div class="quem">${QUEM.map(q => `<button class="${q === "Camila" ? "c" : "k"} ${F.recebidoPor === q ? "on" : ""}" data-f="rec" data-v="${q}">${q}</button>`).join("")}</div>`;
+    h += `<div class="campos"><div class="campo"><label>De onde veio</label><select id="f-fonte">${S.config.fontes.map(f => opt(f.id, f.nome, f.id === F.fonteId)).join("")}</select></div>
+      <div class="campo"><label>Quem recebeu</label><select id="f-rec">${QUEM.map(q => opt(q, q, q === F.recebidoPor)).join("")}</select></div></div>`;
   }
-  h += `<div class="campos" style="margin-top:14px"><div><div class="rot" style="margin-top:0">Data</div><input type="date" data-in="data" value="${F.data}"></div>
-    <div><div class="rot" style="margin-top:0">Descrição</div><input data-in="desc" value="${esc(F.desc)}" placeholder="Opcional"></div></div><div style="height:8px"></div></div>
-    <div class="teclado">${["1","2","3","4","5","6","7","8","9","00","0","⌫"].map(k => `<button data-k="${k}" aria-label="${k === "⌫" ? "Apagar" : k}">${k}</button>`).join("")}</div>
+  h += `<div class="campo"><label>Descrição</label><input id="f-desc" value="${esc(F.desc)}" placeholder="Opcional"></div></div>
     <div class="rodape" style="margin-top:4px">${editando ? `<button class="btn perigo" data-f="excluir">Excluir</button>` : ""}
     <button class="btn" data-f="salvar">${F.modo === "gasto" ? (F.contaId ? "Salvar pagamento" : "Salvar gasto") : "Salvar entrada"}</button></div>`;
   j.innerHTML = h;
-  const novo = j.querySelector(".rolar"); if (novo) novo.scrollTop = pos;
 }
-// teclado do computador: números e apagar entram no valor mesmo sem tocar no campo
-document.addEventListener("keydown", e => {
-  const F = S.form, j = $("#camada1 .janela");
-  if (!F || !j || $("#camada2").classList.contains("aberta") || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (document.activeElement && document.activeElement.matches("input,select,textarea")) return;
-  if (/^[0-9]$/.test(e.key)) { if (F.cents < 1e10) F.cents = F.cents * 10 + +e.key; }
-  else if (e.key === "Backspace") F.cents = Math.floor(F.cents / 10);
-  else return;
-  e.preventDefault(); mostrarValor(j);
-});
-function mostrarValor(j) {
-  const F = S.form, el = j.querySelector("#f-valor"); if (!el) return;
-  el.value = brl(F.cents / 100); el.classList.toggle("zero", !F.cents);
-  const pt = j.querySelector("#f-parc-txt"); if (pt) pt.textContent = F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : "à vista";
+function parcTxt(j) { const F = S.form, el = j.querySelector("#f-parc-txt"); if (el) el.textContent = F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : ""; }
+// lê "500 mercado c6": valor, categoria, forma de pagamento e o resto vira descrição
+function lerRapido(j, txt) {
+  const F = S.form; let t = " " + normT(txt) + " ";
+  const mv = t.match(/(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);
+  if (mv) { F.cents = Math.round(lerValor(mv[1].includes(",") ? mv[1] : mv[1].replace(/\.(?=\d{3}\b)/g, "")) * 100); t = t.replace(mv[0], " "); }
+  else F.cents = 0;
+  if (F.modo === "gasto") {
+    const fm = S.config.formas.filter(f => f.ativo !== false).find(f => normT(f.nome).split(/\s+/).some(w => w.length > 1 && w !== "cartao" && new RegExp(`\\b${w}\\b`).test(t)));
+    if (fm) { F.forma = fm.id; if (fm.tipo === "flash" && fm.dono) F.pagoPor = fm.dono; normT(fm.nome).split(/\s+/).forEach(w => { t = t.replace(new RegExp(`\\b${w}\\b`, "g"), " "); }); }
+    const cs = S.config.categorias.filter(c => c.ativo !== false).sort((a, b) => b.nome.length - a.nome.length);
+    const c = cs.find(c => t.includes(" " + normT(c.nome) + " ")) || cs.find(c => normT(c.nome).split(/[\s\/]+/).some(w => w.length > 3 && t.includes(" " + w + " ")));
+    if (c) { F.catId = c.id; t = t.replace(" " + normT(c.nome) + " ", " "); }
+  } else {
+    const fo = S.config.fontes.find(f => normT(f.nome).split(/\s+/).some(w => w.length > 2 && t.includes(" " + w + " ")));
+    if (fo) { F.fonteId = fo.id; if (fo.recebe) F.recebidoPor = fo.recebe; }
+  }
+  // descrição = palavras que sobraram (tira valor, forma de pagamento, categoria e palavras soltas)
+  const tira = new Set(["gastei","paguei","comprei","recebi","reais","r$","rs","no","na","de","do","da","com","em","pra","para"]);
+  if (F.modo === "gasto") { normT(forma(F.forma).nome).split(/\s+/).forEach(w => w !== "cartao" && tira.add(w)); if (F.catId) normT(cat(F.catId).nome).split(/[\s\/]+/).forEach(w => tira.add(w)); }
+  else if (F.fonteId) normT(fonte(F.fonteId).nome).split(/[\s()]+/).forEach(w => w && tira.add(w));
+  F.desc = String(txt).split(/\s+/).filter(w => w && !(mv && w === mv[0]) && !/^\d+([.,]\d+)*$/.test(w) && !tira.has(normT(w))).join(" ");
+  if (F.desc) F.desc = F.desc.charAt(0).toUpperCase() + F.desc.slice(1);
+  // atualiza os campos na tela sem redesenhar a caixa de texto
+  const set = (sel, v) => { const el = j.querySelector(sel); if (el && v != null) el.value = v; };
+  set("#f-valor", valorTxt(F.cents)); set("#f-cat", F.catId || ""); set("#f-forma", F.forma); set("#f-pago", F.pagoPor);
+  set("#f-fonte", F.fonteId); set("#f-rec", F.recebidoPor); set("#f-desc", F.desc); parcTxt(j);
 }
 function ligarForm(j) {
-  let timer = null, segurou = false;
-  // cursor sempre no fim do valor, pra digitar e apagar sempre o último número
-  const fim = e => { if (e.target.id !== "f-valor") return; const el = e.target; setTimeout(() => { try { el.setSelectionRange(el.value.length, el.value.length); } catch {} }, 0); };
-  j.addEventListener("focusin", fim); j.addEventListener("click", fim); j.addEventListener("keydown", fim);
-  // valor digitado no teclado do celular ou do computador: os números entram como centavos, igual aos botões
-  j.addEventListener("input", e => {
-    const F = S.form; if (!F) return;
-    if (e.target.id === "f-valor") {
-      // apagar tira o último número e digitar acrescenta no fim, não importa onde está o cursor
-      if (/^delete/.test(e.inputType || "")) F.cents = Math.floor(F.cents / 10);
-      else if (e.inputType === "insertText" && e.data) { for (const ch of e.data.replace(/\D/g, "")) if (F.cents < 1e10) F.cents = F.cents * 10 + +ch; }
-      else { const dig = e.target.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 11); F.cents = +dig || 0; }
-      mostrarValor(j);
-      const el = e.target; requestAnimationFrame(() => { try { el.setSelectionRange(el.value.length, el.value.length); } catch {} });
-      return;
-    }
-    // descrição e outros campos: guarda cada letra na hora, pra não se perder se a tela for redesenhada
-    const i = e.target.closest("[data-in]"); if (i && i.dataset.in !== "data") F[i.dataset.in] = i.value;
-  });
-  j.addEventListener("pointerdown", e => {
-    const c = e.target.closest("[data-cat]"); if (!c) return;
-    segurou = false;
-    timer = setTimeout(() => { segurou = true; editarCategoria(c.dataset.cat); }, 550);
-  });
-  const cancela = () => clearTimeout(timer);
-  j.addEventListener("pointerup", cancela); j.addEventListener("pointercancel", cancela); j.addEventListener("pointermove", e => { if (Math.abs(e.movementY) > 4) cancela(); });
-  j.addEventListener("contextmenu", e => { if (e.target.closest("[data-cat]")) e.preventDefault(); });
-  j.addEventListener("change", e => {
-    const i = e.target.closest("[data-in]"); if (!i) return;
-    S.form[i.dataset.in] = i.value;
-    if (i.dataset.in === "data" && S.form.modo === "gasto" && !S.form.editId) { const s = formaSugerida(i.value); if (s && forma(S.form.forma).tipo === "credito") S.form.forma = s.id; desenharForm(j); }
-  });
+  const campo = e => {
+    const F = S.form; if (!F) return; const el = e.target, id = el.id;
+    if (id === "f-rapido") return lerRapido(j, el.value);
+    if (id === "f-valor") { F.cents = Math.round(lerValor(el.value) * 100); return parcTxt(j); }
+    if (id === "f-desc") { F.desc = el.value; return; }
+    if (id === "f-parc") { F.parcelas = Math.max(1, Math.min(48, +el.value || 1)); return parcTxt(j); }
+    if (e.type !== "change") return;
+    if (id === "f-data") { F.data = el.value; if (F.modo === "gasto" && !F.editId && forma(F.forma).tipo === "credito") { const s = formaSugerida(el.value); if (s) { F.forma = s.id; const f = j.querySelector("#f-forma"); if (f) f.value = s.id; } } }
+    else if (id === "f-cat") { if (el.value === "__nova") { el.value = F.catId || ""; return editarCategoria("", nid => { F.catId = nid; desenharForm(j); }); } F.catId = el.value || null; }
+    else if (id === "f-forma") { F.forma = el.value; const f = forma(el.value); if (f.tipo === "flash" && f.dono) { F.pagoPor = f.dono; const p = j.querySelector("#f-pago"); if (p) p.value = f.dono; } }
+    else if (id === "f-pago") F.pagoPor = el.value;
+    else if (id === "f-resp") F.resp = el.value;
+    else if (id === "f-fonte") { F.fonteId = el.value; const f = fonte(el.value); if (f.recebe) { F.recebidoPor = f.recebe; const r = j.querySelector("#f-rec"); if (r) r.value = f.recebe; } }
+    else if (id === "f-rec") F.recebidoPor = el.value;
+  };
+  j.addEventListener("input", campo); j.addEventListener("change", campo);
+  j.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches("input")) { e.preventDefault(); salvarForm(); } });
   j.addEventListener("click", e => {
     const F = S.form; if (!F) return;
-    const c = e.target.closest("[data-cat]");
-    if (c) { if (segurou) { segurou = false; return; } F.catId = c.dataset.cat; return desenharForm(j); }
-    const k = e.target.closest("[data-k]");
-    if (k) {
-      const v = k.dataset.k;
-      if (v === "⌫") F.cents = Math.floor(F.cents / 10);
-      else if (F.cents < 1e10) F.cents = F.cents * (v === "00" ? 100 : 10) + (v === "00" ? 0 : +v);
-      mostrarValor(j);
-      return;
-    }
     const b = e.target.closest("[data-f]"); if (!b) return;
     const a = b.dataset.f, v = b.dataset.v;
-    if (a === "modo") { F.modo = v; if (v === "entrada" && !F.fonteId) F.fonteId = (S.config.fontes[0] || {}).id; }
-    else if (a === "forma") { F.forma = v; const f = forma(v); if (f.tipo === "flash" && f.dono) F.pagoPor = f.dono; }
-    else if (a === "pago") F.pagoPor = v;
-    else if (a === "resp") F.resp = v;
-    else if (a === "parc") F.parcelas = Math.max(1, Math.min(48, F.parcelas + +v));
-    else if (a === "fonte") { F.fonteId = v; const f = fonte(v); if (f.recebe) F.recebidoPor = f.recebe; }
-    else if (a === "rec") F.recebidoPor = v;
-    else if (a === "nova-cat") return editarCategoria("", id => { F.catId = id; desenharForm(j); });
-    else if (a === "salvar") return salvarForm();
-    else if (a === "excluir") return excluirForm();
-    desenharForm(j);
+    if (a === "modo") { F.modo = v; if (v === "entrada" && !F.fonteId) { F.fonteId = (S.config.fontes[0] || {}).id; const f = fonte(F.fonteId); if (f.recebe) F.recebidoPor = f.recebe; } desenharForm(j); }
+    else if (a === "salvar") salvarForm();
+    else if (a === "excluir") excluirForm();
   });
 }
 function salvarForm() {
@@ -1098,6 +1091,12 @@ $("#app").addEventListener("click", e => {
     voltar: () => { S.sub = null; S.pessoaId = null; },
     pessoa: () => { S.pessoaId = v || null; window.scrollTo(0, 0); },
     "editar-cat": () => editarCategoria(v),
+    "salvar-inicio": () => {
+      const m = $("#ini-mes").value; S.config.inicioContas = m;
+      S.contas.filter(x => x.status !== "paga" && x.mes < m).forEach(x => apagar("contas", x.id));
+      S.contas = S.contas.filter(x => x.status === "paga" || x.mes >= m);
+      salvarConfig(); aviso("Contas fixas a partir de " + nomeMes(m)); S.sub = null;
+    },
     "nova-cat-tipo": () => editarCategoria("", null, v),
     "editar-forma": () => editarForma(v),
     "editar-fonte": () => editarFonte(v),
