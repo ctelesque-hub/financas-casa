@@ -150,6 +150,9 @@ input:focus,select:focus{border-color:var(--accent)}
 
 .valor{font-size:2.6rem;font-weight:800;text-align:center;padding:8px 0 10px;letter-spacing:-.02em}
 .valor.zero{color:var(--muted)}
+input.valor{background:none;border:0;border-radius:0;width:100%;color:var(--ink);font-family:inherit;caret-color:transparent}
+input.valor.zero{color:var(--muted)}
+input.valor:focus{border:0}
 .rot{font-size:.82rem;font-weight:700;color:var(--muted);margin:14px 0 8px}
 .grade{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .cat{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:16px;background:var(--surface2);font-size:.72rem;font-weight:600;line-height:1.15;text-align:center;border:2px solid transparent;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -690,13 +693,12 @@ function subtela() {
   if (S.sub === "categorias") {
     let h = volta;
     c.tipos.filter(t => t !== "Parcela").forEach(t => {
-      const cs = c.categorias.filter(x => x.tipo === t);
-      if (!cs.length) return;
-      h += `<section class="card"><h2>${esc(t)}</h2><div class="lista">${cs.map(x => `<button class="item" data-a="editar-cat" data-v="${x.id}" style="${x.ativo === false ? "opacity:.5" : ""}">
+      const cs = c.categorias.filter(x => x.tipo === t && !x.excluida);
+      h += `<section class="card"><h2>${esc(t)}<button data-a="nova-cat-tipo" data-v="${esc(t)}">+ Nova</button></h2>${cs.length ? "" : `<p class="muted small">Nenhuma categoria deste tipo.</p>`}<div class="lista">${cs.map(x => `<button class="item" data-a="editar-cat" data-v="${x.id}" style="${x.ativo === false ? "opacity:.5" : ""}">
         <span class="ic">${esc(x.icone)}</span><span class="meio"><span class="nome">${esc(x.nome)}</span>
         <span class="sub">${[x.dia ? "vence dia " + x.dia : "", +x.previsto ? "previsto " + brl(x.previsto) : "", +x.limite ? "limite " + brl(x.limite) : "", x.ativo === false ? "desativada" : ""].filter(Boolean).join(", ") || "Toque pra ajustar"}</span></span><span class="seta">›</span></button>`).join("")}</div></section>`;
     });
-    const sem = c.categorias.filter(x => !c.tipos.includes(x.tipo) || x.tipo === "Parcela");
+    const sem = c.categorias.filter(x => !x.excluida && (!c.tipos.includes(x.tipo) || x.tipo === "Parcela"));
     if (sem.length) h += `<section class="card"><h2>Sem tipo</h2><div class="lista">${sem.map(x => `<button class="item" data-a="editar-cat" data-v="${x.id}"><span class="ic">${esc(x.icone)}</span><span class="meio"><span class="nome">${esc(x.nome)}</span></span><span class="seta">›</span></button>`).join("")}</div></section>`;
     return h + `<button class="btn cheio" data-a="editar-cat" data-v="">Nova categoria</button>`;
   }
@@ -794,7 +796,7 @@ function desenharForm(j) {
   let h = `<div class="jtopo">${editando || F.contaId ? `<h3 style="flex:1;margin:0">${F.contaId ? "Pagar conta" : editando && F.modo === "gasto" ? "Editar gasto" : "Editar entrada"}</h3>`
     : `<div class="seg"><button data-f="modo" data-v="gasto" class="${F.modo === "gasto" ? "on" : ""}">Gasto</button><button data-f="modo" data-v="entrada" class="${F.modo === "entrada" ? "on" : ""}">Entrada</button></div>`}
     <button class="fechar" data-fechar="1" aria-label="Fechar">✕</button></div>
-    <div class="valor num ${F.cents ? "" : "zero"}">${brl(F.cents / 100)}</div><div class="rolar">`;
+    <input class="valor num ${F.cents ? "" : "zero"}" id="f-valor" inputmode="numeric" autocomplete="off" aria-label="Valor" value="${brl(F.cents / 100)}"><div class="rolar">`;
   if (F.modo === "gasto") {
     const sug = formaSugerida(F.data);
     h += `<div class="rot">Categoria <span style="font-weight:500">(segure pra ajustar)</span></div><div class="grade">${catsOrdenadas().map(c =>
@@ -805,7 +807,7 @@ function desenharForm(j) {
       <div class="rot">Quem pagou</div><div class="quem">${QUEM.map(q => `<button class="${q === "Camila" ? "c" : "k"} ${F.pagoPor === q ? "on" : ""}" data-f="pago" data-v="${q}">${q}</button>`).join("")}</div>
       <div class="rot">De quem é</div><div class="chips">${RESP.map(r => `<button class="chip ${F.resp === r ? "on" : ""}" data-f="resp" data-v="${r}">${r}</button>`).join("")}</div>`;
     if (!editando && !F.contaId) h += `<div class="rot">Parcelas</div><div class="passo"><button data-f="parc" data-v="-1" aria-label="Menos">−</button><b>${F.parcelas}</b><button data-f="parc" data-v="1" aria-label="Mais">+</button>
-      <span class="muted small">${F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : "à vista"}</span></div>`;
+      <span class="muted small" id="f-parc-txt">${F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : "à vista"}</span></div>`;
   } else {
     h += `<div class="rot">De onde veio</div><div class="chips">${S.config.fontes.map(f => `<button class="chip ${F.fonteId === f.id ? "on" : ""}" data-f="fonte" data-v="${f.id}">${esc(f.nome)}</button>`).join("")}</div>
       <div class="rot">Quem recebeu</div><div class="quem">${QUEM.map(q => `<button class="${q === "Camila" ? "c" : "k"} ${F.recebidoPor === q ? "on" : ""}" data-f="rec" data-v="${q}">${q}</button>`).join("")}</div>`;
@@ -818,8 +820,41 @@ function desenharForm(j) {
   j.innerHTML = h;
   const novo = j.querySelector(".rolar"); if (novo) novo.scrollTop = pos;
 }
+// teclado do computador: números e apagar entram no valor mesmo sem tocar no campo
+document.addEventListener("keydown", e => {
+  const F = S.form, j = $("#camada1 .janela");
+  if (!F || !j || $("#camada2").classList.contains("aberta") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.activeElement && document.activeElement.matches("input,select,textarea")) return;
+  if (/^[0-9]$/.test(e.key)) { if (F.cents < 1e10) F.cents = F.cents * 10 + +e.key; }
+  else if (e.key === "Backspace") F.cents = Math.floor(F.cents / 10);
+  else return;
+  e.preventDefault(); mostrarValor(j);
+});
+function mostrarValor(j) {
+  const F = S.form, el = j.querySelector("#f-valor"); if (!el) return;
+  el.value = brl(F.cents / 100); el.classList.toggle("zero", !F.cents);
+  const pt = j.querySelector("#f-parc-txt"); if (pt) pt.textContent = F.parcelas > 1 && F.cents ? `${F.parcelas}x de ${brl(F.cents / 100 / F.parcelas)}` : "à vista";
+}
 function ligarForm(j) {
   let timer = null, segurou = false;
+  // cursor sempre no fim do valor, pra digitar e apagar sempre o último número
+  const fim = e => { if (e.target.id !== "f-valor") return; const el = e.target; setTimeout(() => { try { el.setSelectionRange(el.value.length, el.value.length); } catch {} }, 0); };
+  j.addEventListener("focusin", fim); j.addEventListener("click", fim); j.addEventListener("keydown", fim);
+  // valor digitado no teclado do celular ou do computador: os números entram como centavos, igual aos botões
+  j.addEventListener("input", e => {
+    const F = S.form; if (!F) return;
+    if (e.target.id === "f-valor") {
+      // apagar tira o último número e digitar acrescenta no fim, não importa onde está o cursor
+      if (/^delete/.test(e.inputType || "")) F.cents = Math.floor(F.cents / 10);
+      else if (e.inputType === "insertText" && e.data) { for (const ch of e.data.replace(/\D/g, "")) if (F.cents < 1e10) F.cents = F.cents * 10 + +ch; }
+      else { const dig = e.target.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 11); F.cents = +dig || 0; }
+      mostrarValor(j);
+      const el = e.target; requestAnimationFrame(() => { try { el.setSelectionRange(el.value.length, el.value.length); } catch {} });
+      return;
+    }
+    // descrição e outros campos: guarda cada letra na hora, pra não se perder se a tela for redesenhada
+    const i = e.target.closest("[data-in]"); if (i && i.dataset.in !== "data") F[i.dataset.in] = i.value;
+  });
   j.addEventListener("pointerdown", e => {
     const c = e.target.closest("[data-cat]"); if (!c) return;
     segurou = false;
@@ -842,8 +877,7 @@ function ligarForm(j) {
       const v = k.dataset.k;
       if (v === "⌫") F.cents = Math.floor(F.cents / 10);
       else if (F.cents < 1e10) F.cents = F.cents * (v === "00" ? 100 : 10) + (v === "00" ? 0 : +v);
-      j.querySelector(".valor").outerHTML = `<div class="valor num ${F.cents ? "" : "zero"}">${brl(F.cents / 100)}</div>`;
-      if (F.parcelas > 1) desenharForm(j);
+      mostrarValor(j);
       return;
     }
     const b = e.target.closest("[data-f]"); if (!b) return;
@@ -904,8 +938,8 @@ function excluirForm() {
 }
 
 /* ---- Categoria ---- */
-function editarCategoria(id, depois) {
-  const c = id ? { ...S.config.categorias.find(x => x.id === id) } : { id: "", nome: "", icone: "", tipo: S.config.tipos[0], dia: null, previsto: null, limite: null, ativo: true };
+function editarCategoria(id, depois, tipoNovo) {
+  const c = id ? { ...S.config.categorias.find(x => x.id === id) } : { id: "", nome: "", icone: "", tipo: tipoNovo || S.config.tipos[0], dia: null, previsto: null, limite: null, ativo: true };
   const j = abrir(2, `<h3>${id ? "Ajustar categoria" : "Nova categoria"}</h3><div class="rolar">
     <div class="campos"><div class="campo"><label>Ícone</label><input id="c-ic" value="${esc(c.icone)}" placeholder="🛒" maxlength="4"></div>
     <div class="campo"><label>Tipo</label><select id="c-tipo">${S.config.tipos.filter(t => t !== "Parcela").map(t => `<option ${t === c.tipo ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></div></div>
@@ -915,7 +949,17 @@ function editarCategoria(id, depois) {
     <p class="muted small" style="margin-bottom:10px">Com o dia preenchido, a conta aparece sozinha em A pagar todo mês.</p></div>
     <div class="campo"><label>Limite por mês (opcional)</label><input id="c-lim" inputmode="decimal" value="${c.limite ? String(c.limite).replace(".", ",") : ""}" placeholder="0,00"></div>
     <label class="check"><input type="checkbox" id="c-ativo" ${c.ativo !== false ? "checked" : ""}> Aparece na hora de lançar</label></div>
-    <div class="rodape"><button class="btn leve" data-fechar="2">Cancelar</button><button class="btn" id="c-ok">Salvar</button></div>`);
+    <div class="rodape">${id ? `<button class="btn perigo" id="c-del">Excluir</button>` : ""}<button class="btn leve" data-fechar="2">Cancelar</button><button class="btn" id="c-ok">Salvar</button></div>`);
+  const del = j.querySelector("#c-del");
+  if (del) del.addEventListener("click", () => {
+    if (!del.dataset.conf) { del.dataset.conf = "1"; del.textContent = "Toque de novo pra excluir"; return; }
+    const usada = S.lancamentos.some(l => l.catId === c.id);
+    // contas deste mês em diante que ainda não foram pagas saem de A pagar
+    S.contas.filter(x => x.catId === c.id && x.status !== "paga" && x.mes >= mesAtual()).forEach(x => apagar("contas", x.id));
+    if (usada) { const i = S.config.categorias.findIndex(x => x.id === c.id); S.config.categorias[i] = { ...S.config.categorias[i], ativo: false, dia: null, excluida: true }; }
+    else S.config.categorias = S.config.categorias.filter(x => x.id !== c.id);
+    salvarConfig(); fechar(2); aviso(usada ? "Categoria excluída (os gastos antigos continuam no histórico)" : "Categoria excluída"); agendar();
+  });
   const mostra = () => j.querySelector("#c-fixa").hidden = j.querySelector("#c-tipo").value !== "Fixa";
   mostra(); j.querySelector("#c-tipo").addEventListener("change", mostra);
   j.querySelector("#c-ok").addEventListener("click", () => {
@@ -1054,6 +1098,7 @@ $("#app").addEventListener("click", e => {
     voltar: () => { S.sub = null; S.pessoaId = null; },
     pessoa: () => { S.pessoaId = v || null; window.scrollTo(0, 0); },
     "editar-cat": () => editarCategoria(v),
+    "nova-cat-tipo": () => editarCategoria("", null, v),
     "editar-forma": () => editarForma(v),
     "editar-fonte": () => editarFonte(v),
     "nova-divida": () => novaDivida(v),
