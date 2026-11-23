@@ -1,6 +1,6 @@
 // Guarda o app no celular para abrir sem internet.
 // Com internet, sempre busca a versão nova da página primeiro (assim as atualizações aparecem na hora).
-const CACHE = 'suu-v2';
+const CACHE = 'suu-v3';
 const FB = 'https://www.gstatic.com/firebasejs/13.4.0/';
 const SHELL = ['./', './index.html', './manifest.json'];
 
