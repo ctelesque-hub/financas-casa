@@ -525,6 +525,17 @@ function blocoTipo(ym, tipo, chave, titulo = tipo) {
   return `<details class="blk" ${ab(chave)}><summary><span class="nm">${titulo}</span><span class="money">${fmt(soma(ls.map(l => l.valor)))}</span></summary>
     <div class="list">${ls.length ? Object.keys(dias).map(d => `<div class="day">${dm(d)}</div>${dias[d].map(linhaLanc).join("")}`).join("") : `<p class="hint">Nada lançado.</p>`}</div></details>`;
 }
+// parcelas por mês, a partir do mês aberto, até a última parcela (6 a 12 meses)
+function graficoParcelas(ym) {
+  const ps = S.base.filter(l => l.es === "saida" && (l.parcela || l.tipo === "Parcela"));
+  const porMes = {}; ps.forEach(l => { const m = mesDe(l); if (m >= ym) porMes[m] = r2((porMes[m] || 0) + (+l.valor || 0)); });
+  const ult = Object.keys(porMes).sort().pop() || ym;
+  const meses = []; for (let m = ym; meses.length < 12 && (m <= ult || meses.length < 6); m = addMes(m, 1)) meses.push(m);
+  const max = Math.max(1, ...meses.map(m => porMes[m] || 0));
+  const rot = v => !v ? "" : v >= 1000 ? (Math.round(v / 100) / 10).toString().replace(".", ",") + "k" : Math.round(v);
+  return `<div class="panel"><div class="row between"><h3>Parcelas por mês</h3><span class="hint">${fmt(porMes[ym] || 0)} em ${nomeMes(ym)}</span></div>
+    ${ps.length ? `<div class="graf" style="gap:4px">${meses.map(m => `<div class="col"><span class="vl">${rot(porMes[m] || 0)}</span><i style="height:${(porMes[m] || 0) / max * 100}%"></i><span>${nomeMes(m).slice(0, 3)}<br>${m.slice(5) === "01" ? "/" + m.slice(2, 4) : "&nbsp;"}</span></div>`).join("")}</div>` : `<p class="hint">Nenhuma parcela lançada.</p>`}</div>`;
+}
 function vDash() {
   const ym = S.ym, R = resumo(ym), rc = recebiveis();
   const meses = []; for (let k = 5; k >= 0; k--) meses.push(addMes(ym, -k));
@@ -555,6 +566,7 @@ function vDash() {
       <div class="graf">${hist.map(x => `<div class="col"><span class="vl">${x.v ? Math.round(x.v / 100) / 10 + "k" : ""}</span><i style="height:${x.v / max * 100}%"></i><span>${nomeMes(x.m).slice(0, 3)}</span></div>`).join("")}</div></details>
     ${(() => { const F = fixasResumo(ym); return `<details class="blk" ${ab('dfixas')}><summary><span class="nm">Fixas</span><span class="money">${fmt(F.total)}</span></summary>${linha("Total", fmt(F.total))}${linha("Pago", fmt(F.pago))}${linha("Falta", fmt(F.falta), true)}</details>`; })()}
     ${blocoTipo(ym, "Recorrente", "drec")}${blocoTipo(ym, "Esporádica", "desp", "Esporádico")}
+    ${graficoParcelas(ym)}
   </div>`;
 }
 function editarFechamento(fid) {
