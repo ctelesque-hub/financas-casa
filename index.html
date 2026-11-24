@@ -187,6 +187,9 @@ const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDat
 const hoje = () => isoDate(new Date());
 const ymOf = iso => String(iso).slice(0, 7);
 const addMes = (ym, k) => { let [y, m] = ym.split("-").map(Number); m += k; y += Math.floor((m - 1) / 12); m = ((m - 1) % 12 + 12) % 12 + 1; return `${y}-${pad(m)}`; };
+// mês da casa: fecha no dia 23 — do dia 24 em diante já conta no mês seguinte
+const FECHA_CASA = 23;
+const mesCasa = iso => +String(iso).slice(8, 10) > FECHA_CASA ? addMes(ymOf(iso), 1) : ymOf(iso);
 const diasNoMes = ym => new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
 const nomeMes = ym => MESES[+ym.slice(5, 7) - 1];
 const mesAno = ym => `${nomeMes(ym)} ${ym.slice(0, 4)}`;
@@ -199,16 +202,16 @@ let tT; function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden =
 function falha(e) { console.error(e); toast("Não salvou: " + (e.code || e.message)); }
 
 /* ---------------- estado ---------------- */
-const S = { abertos: new Set(), mercado: [], wishlist: [], soFalta: false, user: null, eu: null, cfg: null, cfgOk: false, base: [], mes: {}, meu: { docs: {}, gastos: [] }, ym: ymOf(hoje()), tela: "lancar", form: null, pend: false, erroLogin: null };
+const S = { abertos: new Set(), mercado: [], wishlist: [], soFalta: false, user: null, eu: null, cfg: null, cfgOk: false, base: [], mes: {}, meu: { docs: {}, gastos: [] }, ym: mesCasa(hoje()), tela: "lancar", form: null, pend: false, erroLogin: null };
 let desligar = [];
 
 const forma = id => (S.cfg?.formas || []).find(f => f.id === id) || { id, nome: id || "—" };
 const ehCartao = id => !!forma(id).cartao;
 const tipoDaDescricao = d => (S.cfg.descricoes.find(x => norm(x.nome) === norm(d)) || {}).tipo;
-// mês em que o lançamento pesa: cartão = mês em que a fatura vence; o resto = mês da data
+// mês em que o lançamento pesa: cartão = mês em que a fatura vence; o resto = mês da casa (24 a 23)
 function competencia(data, formaId) {
   const f = forma(formaId);
-  if (!f.cartao) return ymOf(data);
+  if (!f.cartao) return mesCasa(data);
   const dia = +data.slice(8, 10), F = +f.fecha, V = +f.vence, ym = ymOf(data);
   const fecha = dia < F ? ym : addMes(ym, 1);
   return V > F ? fecha : addMes(fecha, 1);
@@ -422,7 +425,7 @@ function salvar(F) {
   const data = F.data || hoje(), dono = forma(F.forma).dono;
   const l = { es: F.es, data, tipo: F.tipo, descricao: F.descricao, observacao: (F.observacao || "").trim(), forma: F.forma, responsavel: F.responsavel, pagoPor: dono || F.pagoPor, valor: r2(F.valor), criadoPor: F.criadoPor || S.eu, criadoEm: F.criadoEm || Date.now() };
   if (F.fixaId) { l.fixaId = F.fixaId; l.fixaMes = F.fixaMes; }
-  if (F.editId) { if (F.parcela) l.parcela = F.parcela; l.mes = F.es === "saida" ? competencia(data, F.forma) : ymOf(data); salvarLanc(F.editId, l); toast("Atualizado"); return true; }
+  if (F.editId) { if (F.parcela) l.parcela = F.parcela; l.mes = F.es === "saida" ? competencia(data, F.forma) : mesCasa(data); salvarLanc(F.editId, l); toast("Atualizado"); return true; }
   if (F.tipo === "Parcela" && F.parcelas > 1 && F.es === "saida") {
     const n = F.parcelas, g = novoId(), vp = Math.floor(F.valor / n * 100) / 100;
     for (let i = 0; i < n; i++) {
@@ -431,7 +434,7 @@ function salvar(F) {
     }
     toast(`${n} parcelas lançadas`); return true;
   }
-  l.mes = F.es === "saida" ? competencia(data, F.forma) : ymOf(data);
+  l.mes = F.es === "saida" ? competencia(data, F.forma) : mesCasa(data);
   salvarLanc(novoId(), l); toast("Salvo"); return true;
 }
 function janela(titulo, conteudo, aoAbrir) {
@@ -452,7 +455,7 @@ function linhaLanc(l) {
   return `<button class="tx" data-a="editar" data-v="${esc(l.id)}"><span class="d"><span class="t">${esc(l.descricao)}</span><br><span class="s">${esc(sub)}</span></span><span class="money ${l.es === "entrada" ? "pos" : ""}">${l.es === "entrada" ? "+" : ""}${fmt(l.valor)}</span></button>`;
 }
 function vLancar() {
-  const lista = S.base.filter(l => ymOf(l.data) === S.ym && !(l.parcela && l.parcela.n > 1)).sort((a, b) => b.data.localeCompare(a.data) || (b.criadoEm || 0) - (a.criadoEm || 0));
+  const lista = S.base.filter(l => mesCasa(l.data) === S.ym && !(l.parcela && l.parcela.n > 1)).sort((a, b) => b.data.localeCompare(a.data) || (b.criadoEm || 0) - (a.criadoEm || 0));
   const dias = {}; lista.forEach(l => (dias[l.data] = dias[l.data] || []).push(l));
   return `<div class="stack"><div class="panel" id="form-lancar"></div>${navMes()}
     <div class="panel"><h3>Lançamentos de ${nomeMes(S.ym)}</h3><div class="list">${lista.length ? Object.keys(dias).map(d => `<div class="day">${dm(d)}</div>${dias[d].map(linhaLanc).join("")}`).join("") : `<div class="empty" style="margin-top:10px">Nada lançado neste mês.</div>`}</div></div></div>`;
@@ -532,7 +535,7 @@ function vAjustes() {
   const lista = (titulo, chave, itens, extra = "") => `<details class="blk" ${ab(chave)}><summary><span class="nm">${titulo}</span><span class="hint">${itens.length}</span></summary>${extra}
     <div class="list">${itens.map((t, i) => `<div class="tx"><span class="d"><span class="t">${t}</span></span><button class="ghost" data-a="lista-rm" data-k="${chave}" data-v="${i}">Remover</button></div>`).join("")}</div>
     <div class="row" style="margin-top:8px"><input id="add-${chave}" placeholder="Novo item">${chave === "descricoes" ? `<select id="add-${chave}-tipo" style="max-width:140px">${opcoes(c.tipos, "Esporádica")}</select>` : ""}<button data-a="lista-add" data-k="${chave}">+ Adicionar</button></div></details>`;
-  const ms = []; for (let i = -2; i <= 12; i++) ms.push(addMes(ymOf(hoje()), i));
+  const ms = []; for (let i = -2; i <= 12; i++) ms.push(addMes(mesCasa(hoje()), i));
   return `<div class="stack"><h2>Ajustes</h2>
     <div class="grid2"><button class="primary" data-a="ir-meu" style="grid-column:1/-1">Minha área</button><button data-a="ir-mercado">Mercado</button><button data-a="ir-wishlist">Wishlist</button></div>
     ${lista("Tipo", "tipos", c.tipos.map(esc))}
@@ -627,7 +630,7 @@ function vMeu() {
   const minhaParte = R.parte;
   // quem guarda o dinheiro da casa paga parte das contas com ele: só o que passar disso sai do próprio bolso
   const jaPaguei = eu === R.casaCom ? Math.max(0, r2((R.pago[eu] || 0) - R.casa)) : (R.pago[eu] || 0), falta = Math.max(0, r2(minhaParte - jaPaguei));
-  const gs = S.meu.gastos.filter(g => ymOf(g.data) === ym).sort((a, b) => b.data.localeCompare(a.data)), totG = soma(gs.map(g => g.valor));
+  const gs = S.meu.gastos.filter(g => mesCasa(g.data) === ym).sort((a, b) => b.data.localeCompare(a.data)), totG = soma(gs.map(g => g.valor));
   const sobraProj = r2(ent - minhaParte - totG), sobraReal = r2(ent - jaPaguei - totG);
   const cor = v => v < 0 ? "neg" : "pos";
   return `<div class="stack"><button class="ghost" data-tela-ir="ajustes" style="align-self:flex-start">‹ Ajustes</button>${navMes()}
@@ -745,7 +748,7 @@ function acao(a, b = { dataset: {} }) {
     pagar: () => { const x = fixasMes(ym).find(x => x.f.id === v); if (!x) return; abrirForm(novoForm({ tipo: "Fixa", descricao: x.f.descricao, observacao: x.f.nome, valor: +x.f.valor || 0, data: x.venc, forma: x.f.forma, responsavel: x.f.responsavel || "Casa", pagoPor: x.f.pagoPor || S.eu, fixaId: x.f.id, fixaMes: ym }), "Pagar " + x.f.nome); },
     "fixa-nova": () => editarFixa(""),
     "fixas-editar": () => listaFixas(),
-    "lancar-rec": () => abrirForm(novoForm({ tipo: "Recorrente", descricao: v, data: ym === ymOf(hoje()) ? hoje() : `${ym}-01` }), "Lançar " + v),
+    "lancar-rec": () => abrirForm(novoForm({ tipo: "Recorrente", descricao: v, data: ym === mesCasa(hoje()) ? hoje() : `${ym}-01` }), "Lançar " + v),
     "fatura-editar": () => editarFatura(v, false),
     "fatura-pagar": () => editarFatura(v, true),
     "fatura-desfaz": () => salvarMesDoc(ym, { faturas: { [v]: { pago: false, pagoPor: null, data: null } } }),
