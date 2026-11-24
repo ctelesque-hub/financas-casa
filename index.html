@@ -102,6 +102,13 @@ nav.tabs button.on{color:var(--fg)}
 details>summary{cursor:pointer}
 details:not(.blk)>summary{list-style:none}
 details:not(.blk)>summary::-webkit-details-marker{display:none}
+.field input.data-curta{font-size:14px;padding:10px 8px;width:140px;min-width:0;-webkit-appearance:none}
+.buy{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.buy .ck{flex:1;display:flex;align-items:center;gap:12px;background:none;border-radius:0;padding:11px 0;font-weight:500;font-size:16px;text-align:left;color:var(--muted)}
+.buy .ck::before{content:"";width:20px;height:20px;border:2px solid var(--muted);border-radius:6px;flex:none}
+.buy.on .ck{color:var(--fg);font-weight:600}
+.buy.on .ck::before{background:var(--accent);border-color:var(--accent);box-shadow:inset 0 0 0 3px var(--bg)}
+a.lnk{font-size:13px;padding:6px 10px;border-radius:9px;background:var(--sunk);color:var(--fg);text-decoration:none;font-weight:600}
 </style>
 </head>
 <body>
@@ -113,7 +120,7 @@ details:not(.blk)>summary::-webkit-details-marker{display:none}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
 import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
 
 /* =========================================================
    SÛU FINANCE — versão 3, feita do zero a partir da planilha
@@ -192,7 +199,7 @@ let tT; function toast(m) { const t = $("#toast"); t.textContent = m; t.hidden =
 function falha(e) { console.error(e); toast("Não salvou: " + (e.code || e.message)); }
 
 /* ---------------- estado ---------------- */
-const S = { abertos: new Set(), user: null, eu: null, cfg: null, cfgOk: false, base: [], mes: {}, meu: { docs: {}, gastos: [] }, ym: ymOf(hoje()), tela: "lancar", form: null, pend: false, erroLogin: null };
+const S = { abertos: new Set(), mercado: [], wishlist: [], soFalta: false, user: null, eu: null, cfg: null, cfgOk: false, base: [], mes: {}, meu: { docs: {}, gastos: [] }, ym: ymOf(hoje()), tela: "lancar", form: null, pend: false, erroLogin: null };
 let desligar = [];
 
 const forma = id => (S.cfg?.formas || []).find(f => f.id === id) || { id, nome: id || "—" };
@@ -298,6 +305,8 @@ function ligar() {
   }, falha));
   desligar.push(onSnapshot(collection(db, "base"), q => { S.base = q.docs.map(d => ({ id: d.id, ...d.data() })); agendar(); }, falha));
   desligar.push(onSnapshot(collection(db, "mes"), q => { const m = {}; q.docs.forEach(d => m[d.id] = d.data()); S.mes = m; agendar(); }, falha));
+  desligar.push(onSnapshot(collection(db, "mercado"), q => { S.mercado = q.docs.map(d => ({ id: d.id, ...d.data() })); agendar(); }, falha));
+  desligar.push(onSnapshot(collection(db, "wishlist"), q => { S.wishlist = q.docs.map(d => ({ id: d.id, ...d.data() })); agendar(); }, falha));
   desligar.push(onSnapshot(collection(db, "usuarios", S.user.uid, "meu"), q => {
     const docs = {}, gastos = []; q.docs.forEach(d => { const o = { id: d.id, ...d.data() }; if (o.t === "g") gastos.push(o); else docs[d.id] = o; });
     S.meu = { docs, gastos }; agendar();
@@ -329,9 +338,9 @@ function render() {
   if (!S.user) { tabs.hidden = true; app.innerHTML = telaEntrar(); return; }
   if (!S.cfg) { tabs.hidden = true; app.innerHTML = `<div class="entrada"><h2>Carregando…</h2><p class="hint">Na primeira vez, precisa de internet.</p></div>`; return; }
   tabs.hidden = false;
-  const ativa = S.tela === "meu" ? "ajustes" : S.tela;
+  const ativa = ["meu", "mercado", "wishlist"].includes(S.tela) ? "ajustes" : S.tela;
   $("#tabsIn").innerHTML = TELAS.map(([k, l]) => `<button data-tela="${k}" class="${ativa === k ? "on" : ""}">${IC[k]}<span>${l}</span></button>`).join("");
-  app.innerHTML = `<div class="top"><h1>Sûu Finance</h1><span class="who">${esc(S.eu)}</span></div>` + ({ lancar: vLancar, apagar: vApagar, dash: vDash, ajustes: vAjustes, meu: vMeu }[S.tela])();
+  app.innerHTML = `<div class="top"><h1>Sûu Finance</h1><span class="who">${esc(S.eu)}</span></div>` + ({ lancar: vLancar, apagar: vApagar, dash: vDash, ajustes: vAjustes, meu: vMeu, mercado: vMercado, wishlist: vWishlist }[S.tela])();
   depois();
 }
 function telaEntrar() {
@@ -356,7 +365,7 @@ function formHTML(F) {
   const dono = forma(F.forma).dono;
   let h = "";
   if (!ed && !fixa) h += `<div class="seg" style="margin-bottom:12px"><button data-f="es" data-v="saida" class="${F.es === "saida" ? "on" : ""}">Saída</button><button data-f="es" data-v="entrada" class="${F.es === "entrada" ? "on" : ""}">Entrada</button></div>`;
-  h += `<div class="grid2"><div class="field"><span class="lbl">Data</span><input data-in="data" type="date" value="${esc(F.data)}"></div>
+  h += `<div class="grid2" style="grid-template-columns:auto 1fr"><div class="field"><span class="lbl">Data</span><input data-in="data" type="date" class="data-curta" value="${esc(F.data)}"></div>
       <div class="field"><span class="lbl">Tipo</span><select data-in="tipo" ${fixa ? "disabled" : ""}>${opcoes(tipos, F.tipo)}</select></div></div>
     <div class="grid2" style="margin-top:10px"><div class="field"><span class="lbl">Descrição</span><select data-in="descricao">${opcoes([["", "Escolha…"], ...descs], F.descricao)}</select></div>
       <div class="field"><span class="lbl">Observação</span><input data-in="observacao" value="${esc(F.observacao)}" placeholder="Opcional"></div></div>
@@ -525,7 +534,7 @@ function vAjustes() {
     <div class="row" style="margin-top:8px"><input id="add-${chave}" placeholder="Novo item">${chave === "descricoes" ? `<select id="add-${chave}-tipo" style="max-width:140px">${opcoes(c.tipos, "Esporádica")}</select>` : ""}<button data-a="lista-add" data-k="${chave}">+ Adicionar</button></div></details>`;
   const ms = []; for (let i = -2; i <= 12; i++) ms.push(addMes(ymOf(hoje()), i));
   return `<div class="stack"><h2>Ajustes</h2>
-    <button class="primary full" data-a="ir-meu">Minha área (Meu)</button>
+    <div class="grid2"><button class="primary" data-a="ir-meu" style="grid-column:1/-1">Minha área</button><button data-a="ir-mercado">Mercado</button><button data-a="ir-wishlist">Wishlist</button></div>
     ${lista("Tipo", "tipos", c.tipos.map(esc))}
     ${lista("Descrição", "descricoes", c.descricoes.map(d => `${esc(d.nome)} <span class="hint">· ${esc(d.tipo)}</span>`), `<p class="hint">O tipo ao lado é o que entra sozinho ao escolher a descrição no Lançar.</p>`)}
     <details class="blk" ${ab('formadepagamento')}><summary><span class="nm">Forma de pagamento</span><span class="hint">${c.formas.length}</span></summary>
@@ -633,7 +642,87 @@ function vMeu() {
       <div class="grid2"><div class="field"><span class="lbl">Valor e o que foi</span><input id="meuTxt" placeholder="80 blusa" autocomplete="off"></div><div class="field"><span class="lbl">Categoria</span><select id="meuCat">${opcoes(MEU_CATS, "Outros")}</select></div></div>
       <div class="grid2" style="grid-template-columns:1fr auto;align-items:end"><div class="field"><span class="lbl">Data</span><input id="meuData" type="date" value="${hoje()}"></div><button class="primary" data-a="meu-add">Lançar</button></div>
       <div class="list">${gs.length ? gs.map(g => `<div class="tx"><span class="d"><span class="t">${esc(g.descricao || g.categoria)}</span><br><span class="s">${dm(g.data)} · ${esc(g.categoria)}</span></span><span class="row"><span class="money">${fmt(g.valor)}</span><button class="ghost" data-a="meu-rm" data-v="${esc(g.id)}">Remover</button></span></div>`).join("") : `<div class="empty">Nenhum gasto pessoal neste mês.</div>`}</div></div>
-    <p class="hint" style="text-align:center">Só você vê esta área.</p></div>`;
+    <p class="hint" style="text-align:center">Só você vê a Minha área.</p></div>`;
+}
+
+
+/* ================= MERCADO e WISHLIST (os dois veem, abertos pelos botões em Ajustes) ================= */
+const limpaId = o => { const { id, ...r } = o; return r; };
+const GR_MERCADO = ["Mistura", "Limpeza", "Higiene", "Horta", "Besteira", "Alimentos"];
+const GR_WISH = ["Quarto casal", "Sala", "Varanda", "Quarto Mariana", "Cozinha", "Lavanderia", "Banheiro Mariana", "Banheiro Kaike"];
+// listas trazidas do app antigo: entram uma vez só, na primeira vez que a tela é aberta
+const SEMENTE = {
+  mercado: [["Mistura", "Mistura,Ovo,Peixe"], ["Limpeza", "Papel toalha,Lava roupa,Amaciante,Cândida,Veja,Álcool,Detergente"],
+    ["Higiene", "Pasta de dente,Papel higiênico,Sabonete,Shampoo,Condicionador,Desodorante,Óleo corporal,Shampoo Mariana"],
+    ["Horta", "Batata,Batata doce,Cenoura,Tomate,Limão,Cebola,Brócolis congelado,Feira,Repolho,Salada,Pimentão"], ["Besteira", "Bolacha,Salgadinho"],
+    ["Alimentos", "Arroz,Feijão,Macarrão,Açúcar,Sal,Café,Chá,Cuscuz,Farofa,Torrada,Cacau em pó,Óleo,Alho congelado,Azeite,Ketchup,Manteiga,Maionese,Requeijão,Creme de leite,Yakult vó,Yakult Mariana,Leite,Mussarela,Vinagre,Iogurte natural desnatado,Pão integral,Atum"]]
+    .flatMap(([g, l], gi) => l.split(",").map((n, i) => ({ nome: n, grupo: g, comprar: false, criadoEm: gi * 100 + i }))),
+  wishlist: [
+    { nome: "Cama king", grupo: "Quarto casal", descricao: "Cama Box Baú King + Colchão AirTech Spring Ortobom", link: "https://www.pontofrio.com.br/cama-box-bau-king-colchao-de-molas-ensacadas-airtech-spring-193x203x67-ortobom/p/1576042387", valor: 2959.9, parcelas: 10, valorParcela: 348.22 },
+    { nome: "Guarda-roupa", grupo: "Quarto casal", descricao: "Modulado Soberano 11 portas 8 gavetas, MDF Cinamomo/Chumbo", link: "https://www.panoramamoveis.com.br/guarda-roupa-modulado-soberano-11-portas-8-gavetas-100-mdf-cinamomo-chumbo-panorama-moveis-104079.html", valor: 1828.9, parcelas: 10, valorParcela: 220.35 },
+    { nome: "TV 60\"", grupo: "Quarto casal", descricao: "Smart TV 4K 60\" LG UHD 60UA8550PSA", link: "https://www.carrefour.com.br/produto/smart-tv-4k-60-lg-uhd-60ua8550psa-a7-ai-ger8-4k-super-upscaling-google-cast-alexa-integrado-controle-ai-smart-magic-webos-25-336220411", valor: 2868.05 },
+    { nome: "Estante", grupo: "Quarto casal", descricao: "Estante para Livros Arco 10 Nichos Cinamomo - Artely", link: "https://www.panoramamoveis.com.br/estante-para-livros-arco-10-nichos-cinamomo-artely-moveis-117319.html", valor: 333.9, parcelas: 10, valorParcela: 40.23 },
+    { nome: "Mesa de escritório", grupo: "Quarto casal", descricao: "Escrivaninha Office 120cm Cali Preto", link: "https://www.madeiramadeira.com.br/escrivaninha-mesa-escritorio-office-120cm-cali-preto-951279.html", valor: 269.98, parcelas: 3, valorParcela: 105.87 },
+    { nome: "Painel TV", grupo: "Quarto casal", descricao: "Painel Slim até 60\" Cinamomo com suporte - Artely", link: "https://www.panoramamoveis.com.br/painel-para-tv-ate-60-polegadas-slim-cinamomo-c-suporte-para-tv-artely-moveis-105614.html", valor: 231.9, parcelas: 6, valorParcela: 46.57 },
+    { nome: "Cabeceira cama", grupo: "Quarto casal", descricao: "Kit 12 placas 3D 50x50", link: "https://www.mercadolivre.com.br/kit-12-placas-paineis-parede-50x50-revestimento-3d-3m2-pvc/up/MLBU3809563553?pdp_filters=item_id%3AMLB4493806691" },
+    { nome: "Painel PC", grupo: "Quarto casal", descricao: "Kit 12 placas 3D 50x50", link: "https://www.mercadolivre.com.br/kit-12-placas-paineis-parede-50x50-revestimento-3d-3m2-pvc/up/MLBU3809563553?pdp_filters=item_id%3AMLB4493806691" },
+    { nome: "Suporte tela", grupo: "Quarto casal", descricao: "Suporte articulado Zinnia Fortress 200, 17\" a 32\"", link: "https://www.pichau.com.br/suporte-articulado-de-parede-para-monitor-zinnia-fortress-200-pistao-a-gas-17-pol-a-32-pol-preto-zno-ftrs200-bk01", valor: 159.99, parcelas: 12, valorParcela: 15.69, comprado: true, compradoEm: "2026-10-21" },
+    { nome: "Tela de PC", grupo: "Quarto casal", valor: 1600, comprado: true, compradoEm: "2026-10-20" },
+    { nome: "Conjunto área externa com ombrelone", grupo: "Varanda", valor: 1500 },
+    { nome: "Suporte para rede", grupo: "Varanda", link: "https://www.mercadolivre.com.br/suporte-dobravel-para-rede-de-descanso-em-aco-reforcado/up/MLBU3548088388?pdp_filters=item_id%3AMLB5912537640", valor: 400 },
+    { nome: "Prensa hambúrguer", grupo: "Cozinha", link: "https://www.mercadolivre.com.br/up/MLBU5374914261?pdp_filters=item_id:MLB5342602095", valor: 55 },
+    { nome: "Limpadora", grupo: "Lavanderia", descricao: "Shark HydroVac MessMaster Corded (WD161)", valor: 2500 }
+  ].map((w, i) => ({ descricao: "", link: "", valor: 0, parcelas: 0, valorParcela: 0, comprado: false, criadoEm: i, ...w }))
+};
+async function semear(qual) {
+  S.cfg.semeado = S.cfg.semeado || {};
+  if (S.cfg.semeado[qual] || S[qual].length) return;
+  S.cfg.semeado[qual] = true; salvarCfg();
+  try { const b = writeBatch(db); SEMENTE[qual].forEach(x => b.set(doc(db, qual, novoId()), x)); await b.commit(); toast(qual === "mercado" ? "Lista do mercado carregada" : "Wishlist carregada"); } catch (e) { falha(e); }
+}
+function vMercado() {
+  const falta = S.mercado.filter(x => x.comprar);
+  const grupos = [...GR_MERCADO, ...new Set(S.mercado.map(x => x.grupo).filter(g => !GR_MERCADO.includes(g)))];
+  const itens = S.soFalta ? falta : S.mercado;
+  return `<div class="stack"><button class="ghost" data-tela-ir="ajustes" style="align-self:flex-start">‹ Ajustes</button>
+    <div class="row between"><h2>Mercado</h2><span class="hint">${falta.length} para comprar</span></div>
+    <p class="hint">Toque no item para marcar o que precisa comprar. Os dois veem a mesma lista.</p>
+    <div class="row"><button class="${S.soFalta ? "primary" : ""}" data-a="m-falta">${S.soFalta ? "Mostrando só o que falta" : "Mostrar só o que falta"}</button>${falta.length ? `<button data-a="m-comprei">Comprei tudo</button>` : ""}</div>
+    ${grupos.map(g => { const l = itens.filter(x => x.grupo === g).sort((a, b) => (a.criadoEm || 0) - (b.criadoEm || 0)); return l.length ? `<div class="panel"><div class="grp" style="margin-top:0">${esc(g)}</div>${l.map(x => `<div class="buy ${x.comprar ? "on" : ""}"><button class="ck" data-a="m-tog" data-v="${esc(x.id)}">${esc(x.nome)}</button><button class="ghost" data-a="m-rm" data-v="${esc(x.id)}" aria-label="Remover">✕</button></div>`).join("")}</div>` : ""; }).join("") || `<div class="empty">${S.soFalta ? "Nada marcado para comprar." : "Lista vazia."}</div>`}
+    <div class="panel stack"><h3>Adicionar item</h3><div class="grid2"><input id="m-nome" placeholder="Ex.: Detergente"><select id="m-grupo">${opcoes(grupos, "Alimentos")}</select></div><button class="primary" data-a="m-add">Adicionar</button></div></div>`;
+}
+function vWishlist() {
+  const quero = S.wishlist.filter(x => !x.comprado), feitos = S.wishlist.filter(x => x.comprado);
+  const grupos = [...GR_WISH, ...new Set(S.wishlist.map(x => x.grupo).filter(g => !GR_WISH.includes(g)))];
+  const item = x => `<div class="tx" style="align-items:flex-start"><button class="d" data-a="w-editar" data-v="${esc(x.id)}" style="background:none;padding:0;text-align:left;color:var(--fg);font-weight:400;flex:1"><span class="t">${esc(x.nome)}</span><br><span class="s">${x.valor ? fmt(x.valor) : "sem preço"}${x.parcelas ? ` · ${x.parcelas}x de ${fmt(x.valorParcela)}` : ""}${x.descricao ? " · " + esc(x.descricao) : ""}${x.comprado ? " · comprado " + dm(x.compradoEm) : ""}</span></button>
+    <span class="row">${x.link ? `<a class="lnk" href="${esc(x.link)}" target="_blank" rel="noopener">Ver</a>` : ""}<button class="ghost" data-a="w-tog" data-v="${esc(x.id)}">${x.comprado ? "Desfazer" : "Comprei"}</button></span></div>`;
+  return `<div class="stack"><button class="ghost" data-tela-ir="ajustes" style="align-self:flex-start">‹ Ajustes</button>
+    <div class="row between"><h2>Wishlist</h2><span class="money">${fmt(soma(quero.map(x => x.valor)))}</span></div>
+    <p class="hint">${quero.length} itens para comprar. Toque no nome para editar. Os dois veem a mesma lista.</p>
+    ${grupos.map(g => { const l = quero.filter(x => x.grupo === g); return l.length ? `<div class="panel"><div class="row between"><div class="grp" style="margin:0">${esc(g)}</div><span class="hint">${fmt(soma(l.map(x => x.valor)))}</span></div><div class="list">${l.map(item).join("")}</div></div>` : ""; }).join("") || `<div class="empty">Nada na lista.</div>`}
+    <button class="primary full" data-a="w-editar" data-v="">+ Adicionar desejo</button>
+    ${feitos.length ? `<details class="blk" ${ab("wfeitos")}><summary><span class="nm">Já comprados</span><span class="hint">${feitos.length}</span></summary><div class="list">${feitos.map(item).join("")}</div></details>` : ""}</div>`;
+}
+function editarDesejo(id) {
+  const w = id ? { ...S.wishlist.find(x => x.id === id) } : { nome: "", grupo: "Quarto casal", descricao: "", link: "", valor: 0, parcelas: 0, valorParcela: 0 };
+  const grupos = [...GR_WISH, ...new Set(S.wishlist.map(x => x.grupo).filter(g => !GR_WISH.includes(g)))];
+  janela(id ? "Editar desejo" : "Novo desejo", `<div class="stack">
+    <div class="field"><span class="lbl">Nome</span><input id="wn" value="${esc(w.nome)}"></div>
+    <div class="field"><span class="lbl">Cômodo</span><select id="wg">${opcoes(grupos, w.grupo)}</select></div>
+    <div class="field"><span class="lbl">Detalhe</span><input id="wd" value="${esc(w.descricao)}" placeholder="Modelo, cor…"></div>
+    <div class="field"><span class="lbl">Link</span><input id="wl" value="${esc(w.link)}" placeholder="https://"></div>
+    <div class="grid2"><div class="field"><span class="lbl">Preço à vista (R$)</span><input id="wv" inputmode="decimal" value="${vTxt(w.valor)}"></div>
+      <div class="field"><span class="lbl">Parcelas</span><input id="wp" type="number" inputmode="numeric" value="${w.parcelas || ""}"></div></div>
+    <div class="field"><span class="lbl">Valor da parcela (R$)</span><input id="wvp" inputmode="decimal" value="${vTxt(w.valorParcela)}"></div>
+    <div class="row">${id ? `<button class="danger" id="wx">Excluir</button>` : ""}<button class="primary" style="flex:1" id="wok">Salvar</button></div></div>`, (box, fechar) => {
+    const del = box.querySelector("#wx");
+    if (del) del.onclick = () => { if (!del.dataset.ok) { del.dataset.ok = 1; del.textContent = "Toque de novo"; return; } deleteDoc(doc(db, "wishlist", id)).catch(falha); fechar(); };
+    box.querySelector("#wok").onclick = () => {
+      const nome = box.querySelector("#wn").value.trim(); if (!nome) return toast("Dê um nome");
+      const d = { ...limpaId(w), nome, grupo: box.querySelector("#wg").value, descricao: box.querySelector("#wd").value.trim(), link: box.querySelector("#wl").value.trim(), valor: lerValor(box.querySelector("#wv").value), parcelas: +box.querySelector("#wp").value || 0, valorParcela: lerValor(box.querySelector("#wvp").value), comprado: !!w.comprado, criadoEm: w.criadoEm || Date.now() };
+      setDoc(doc(db, "wishlist", id || novoId()), limpa(d)).catch(falha); toast("Salvo"); fechar();
+    };
+  });
 }
 
 /* ================= AÇÕES ================= */
@@ -675,6 +764,15 @@ function acao(a, b = { dataset: {} }) {
     "entrada-editar": () => editarEntrada(v),
     "geral-salvar": () => { S.cfg.inicio = $("#g-ini").value; S.cfg.casaCom = $("#g-casa").value; salvarCfg(); toast("Salvo"); },
     "ir-meu": () => { S.tela = "meu"; scrollTo(0, 0); render(); },
+    "ir-mercado": () => { semear("mercado"); S.tela = "mercado"; scrollTo(0, 0); render(); },
+    "ir-wishlist": () => { semear("wishlist"); S.tela = "wishlist"; scrollTo(0, 0); render(); },
+    "m-tog": () => { const i = S.mercado.find(x => x.id === v); if (i) setDoc(doc(db, "mercado", v), { ...limpaId(i), comprar: !i.comprar }).catch(falha); },
+    "m-rm": () => { if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = "Confirmar"; return; } deleteDoc(doc(db, "mercado", v)).catch(falha); },
+    "m-add": () => { const n = $("#m-nome").value.trim(); if (!n) return toast("Escreva o item"); if (S.mercado.some(x => norm(x.nome) === norm(n))) return toast("Já está na lista"); setDoc(doc(db, "mercado", novoId()), { nome: n, grupo: $("#m-grupo").value, comprar: true, criadoEm: Date.now() }).catch(falha); $("#m-nome").value = ""; },
+    "m-comprei": () => { if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = "Toque de novo"; return; } S.mercado.filter(x => x.comprar).forEach(x => setDoc(doc(db, "mercado", x.id), { ...limpaId(x), comprar: false }).catch(falha)); toast("Lista zerada"); },
+    "m-falta": () => { S.soFalta = !S.soFalta; render(); },
+    "w-editar": () => editarDesejo(v),
+    "w-tog": () => { const i = S.wishlist.find(x => x.id === v); if (i) setDoc(doc(db, "wishlist", v), { ...limpaId(i), comprado: !i.comprado, compradoEm: !i.comprado ? hoje() : null }).catch(falha); },
     "meu-salvar": () => setDoc(meuRef("m-" + ym), { salario: lerValor($("#meuSal").value), extras: lerValor($("#meuExt").value) }).then(() => toast("Salvo")).catch(falha),
     "meu-add": () => {
       const t = ($("#meuTxt").value || "").trim(), mm = t.match(/(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/), val = mm ? lerValor(mm[1]) : 0;
