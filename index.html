@@ -239,7 +239,9 @@ function fixasMes(ym) {
 function fixasNoCartao(f, ym) {
   const out = [];
   for (let k = -2; k <= 0; k++) {
-    const m = addMes(ym, k); if (m < (S.cfg.inicio || "")) continue;
+    // Carrefour: a 1ª fatura (dezembro) também leva as cobranças de novembro feitas depois do fechamento
+    const ini = S.cfg.inicio || "", m = addMes(ym, k);
+    if (m < ini && !(f.id === "carrefour" && m === addMes(ini, -1) && ym >= ini)) continue;
     S.cfg.fixas.filter(x => x.forma === f.id).forEach(x => {
       if (S.base.some(l => l.fixaId === x.id && l.fixaMes === m)) return;
       const d = vencNoMes(m, x.dia); if (competencia(d, f.id) !== ym) return;
