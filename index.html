@@ -109,6 +109,9 @@ details:not(.blk)>summary::-webkit-details-marker{display:none}
 .buy.on .ck{color:var(--fg);font-weight:600}
 .buy.on .ck::before{background:var(--accent);border-color:var(--accent);box-shadow:inset 0 0 0 3px var(--bg)}
 a.lnk{font-size:13px;padding:6px 10px;border-radius:9px;background:var(--sunk);color:var(--fg);text-decoration:none;font-weight:600}
+.data-btn{position:relative;display:block}
+.data-btn .data-txt{display:block;padding:9px 12px;border-radius:9px;background:var(--sunk);border:1px solid var(--line);font-size:16px;white-space:nowrap}
+.data-btn input{position:absolute;inset:0;width:100%;height:100%;opacity:0;-webkit-appearance:none;appearance:none}
 </style>
 </head>
 <body>
@@ -185,6 +188,7 @@ const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLow
 const pad = n => String(n).padStart(2, "0");
 const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const hoje = () => isoDate(new Date());
+const dataNum = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}` : "—";
 const ymOf = iso => String(iso).slice(0, 7);
 const addMes = (ym, k) => { let [y, m] = ym.split("-").map(Number); m += k; y += Math.floor((m - 1) / 12); m = ((m - 1) % 12 + 12) % 12 + 1; return `${y}-${pad(m)}`; };
 // mês da casa: fecha no dia 23 — do dia 24 em diante já conta no mês seguinte
@@ -212,27 +216,45 @@ const tipoDaDescricao = d => (S.cfg.descricoes.find(x => norm(x.nome) === norm(d
 function competencia(data, formaId) {
   const f = forma(formaId);
   if (!f.cartao) return mesCasa(data);
-  const dia = +data.slice(8, 10), F = +f.fecha, V = +f.vence, ym = ymOf(data);
-  const fecha = dia < F ? ym : addMes(ym, 1);
-  return V > F ? fecha : addMes(fecha, 1);
+  const base = ymOf(data);
+  for (let k = -1; k <= 3; k++) { const M = addMes(base, k); if (data < fechaData(f, M)) return M; }
+  return addMes(base, 3);
 }
+// dia em que fecha a fatura que vence no mês M (pode ser ajustado mês a mês no Dash)
+const fechaDia = (f, M) => +(S.mes[M]?.faturas?.[f.id]?.fecha || f.fecha);
+const fechaData = (f, M) => { const F = fechaDia(f, M); return vencNoMes(+f.vence > F ? M : addMes(M, -1), F); };
+// mês em que o lançamento pesa (cartão é recalculado na hora, para respeitar o fechamento do mês)
+const mesDe = l => l.es === "saida" && ehCartao(l.forma) ? competencia(l.data, l.forma) : l.mes;
 const vencNoMes = (ym, dia) => `${ym}-${pad(Math.min(+dia || 1, diasNoMes(ym)))}`;
 const ehEmprestimo = l => l.tipo === "Empréstimo";
 const ehRecebimento = l => l.tipo === "Recebimento";
 
 /* ================= CÁLCULOS ================= */
-const saidasMes = ym => S.base.filter(l => l.es === "saida" && l.mes === ym);
+const saidasMes = ym => S.base.filter(l => l.es === "saida" && mesDe(l) === ym);
 function fixasMes(ym) {
   if (ym < (S.cfg.inicio || "")) return [];
   return S.cfg.fixas.map(f => ({ f, venc: vencNoMes(ym, f.dia), pago: S.base.find(l => l.fixaId === f.id && l.fixaMes === ym) })).sort((a, b) => a.venc.localeCompare(b.venc));
 }
+// contas fixas no cartão: entram sozinhas na fatura, pela data de vencimento delas
+function fixasNoCartao(f, ym) {
+  const out = [];
+  for (let k = -2; k <= 0; k++) {
+    const m = addMes(ym, k); if (m < (S.cfg.inicio || "")) continue;
+    S.cfg.fixas.filter(x => x.forma === f.id).forEach(x => {
+      if (S.base.some(l => l.fixaId === x.id && l.fixaMes === m)) return;
+      const d = vencNoMes(m, x.dia); if (competencia(d, f.id) !== ym) return;
+      out.push({ id: "", auto: x.id, es: "saida", data: d, tipo: "Fixa", descricao: x.nome, observacao: "automática", forma: f.id, responsavel: x.responsavel || "Casa", pagoPor: f.dono || x.pagoPor || "", valor: +x.valor || 0 });
+    });
+  }
+  return out;
+}
 function faturasMes(ym) {
   return S.cfg.formas.filter(f => f.cartao).map(f => {
-    const itens = saidasMes(ym).filter(l => l.forma === f.id), total = soma(itens.map(l => l.valor));
+    const itens = [...saidasMes(ym).filter(l => l.forma === f.id), ...fixasNoCartao(f, ym)], total = soma(itens.map(l => l.valor));
     const st = S.mes[ym]?.faturas?.[f.id] || {};
     const valor = st.valor != null ? +st.valor : total;
     const emprestimos = soma(itens.filter(ehEmprestimo).map(l => l.valor));
-    return { f, itens, total, valor, emprestimos, venc: vencNoMes(ym, f.vence), pago: !!st.pago, pagoPor: st.pagoPor || "", st };
+    return { f, itens, total, valor, emprestimos, venc: vencNoMes(ym, f.vence), fecha: fechaData(f, ym), fechaMudou: st.fecha != null, pago: !!st.pago, pagoPor: st.pagoPor || "", st };
   });
 }
 function entradasMes(ym) {
@@ -246,7 +268,7 @@ function entradasMes(ym) {
 function resumo(ym) {
   const fats = faturasMes(ym), fixas = fixasMes(ym);
   const avulsos = saidasMes(ym).filter(l => !ehCartao(l.forma) && !ehEmprestimo(l) && !l.fixaId);
-  const fixasValor = fixas.map(x => x.pago ? (ehCartao(x.pago.forma) ? 0 : x.pago.valor) : (+x.f.valor || 0));   // fixa paga no cartão já está na fatura
+  const fixasValor = fixas.map(x => x.pago ? (ehCartao(x.pago.forma) ? 0 : x.pago.valor) : ehCartao(x.f.forma) ? 0 : (+x.f.valor || 0));   // fixa no cartão entra pela fatura   // fixa paga no cartão já está na fatura
   const faturasLiq = fats.map(x => r2(x.valor - x.emprestimos));
   const total = r2(soma(avulsos.map(l => l.valor)) + soma(fixasValor) + soma(faturasLiq));
   const ent = entradasMes(ym), casa = ent.casa, casaCom = DUPLA.includes(S.cfg.casaCom) ? S.cfg.casaCom : "Kaike";
@@ -364,11 +386,14 @@ function novoForm(x = {}) {
 }
 function formHTML(F) {
   const ed = !!F.editId, fixa = !!F.fixaId;
-  const descs = S.cfg.descricoes.map(d => d.nome), tipos = S.cfg.tipos;
+  // lançamento novo: Saída mostra só Recorrente, Esporádica e Empréstimo; Entrada só Recebimento
+  const vale = d => ed || fixa || (F.es === "entrada" ? d.tipo === "Recebimento" : ["Recorrente", "Esporádica", "Empréstimo"].includes(d.tipo));
+  const descs = S.cfg.descricoes.filter(vale).map(d => d.nome), tipos = S.cfg.tipos;
+  if (F.descricao && !descs.includes(F.descricao)) { if (ed || fixa) descs.push(F.descricao); else F.descricao = ""; }
   const dono = forma(F.forma).dono;
   let h = "";
   if (!ed && !fixa) h += `<div class="seg" style="margin-bottom:12px"><button data-f="es" data-v="saida" class="${F.es === "saida" ? "on" : ""}">Saída</button><button data-f="es" data-v="entrada" class="${F.es === "entrada" ? "on" : ""}">Entrada</button></div>`;
-  h += `<div class="grid2" style="grid-template-columns:auto 1fr"><div class="field"><span class="lbl">Data</span><input data-in="data" type="date" class="data-curta" value="${esc(F.data)}"></div>
+  h += `<div class="grid2" style="grid-template-columns:auto 1fr"><div class="field"><span class="lbl">Data</span><label class="data-btn"><span class="data-txt">${dataNum(F.data)}</span><input data-in="data" type="date" value="${esc(F.data)}"></label></div>
       <div class="field"><span class="lbl">Tipo</span><select data-in="tipo" ${fixa ? "disabled" : ""}>${opcoes(tipos, F.tipo)}</select></div></div>
     <div class="grid2" style="margin-top:10px"><div class="field"><span class="lbl">Descrição</span><select data-in="descricao">${opcoes([["", "Escolha…"], ...descs], F.descricao)}</select></div>
       <div class="field"><span class="lbl">Observação</span><input data-in="observacao" value="${esc(F.observacao)}" placeholder="Opcional"></div></div>
@@ -398,6 +423,7 @@ function ligarForm(box, F, fechar) {
     if (k === "valor") F.valor = lerValor(v);
     else if (k === "parcelas") F.parcelas = Math.max(2, Math.min(48, +v || 2));
     else F[k] = v;
+    if (k === "data") { const t = el.parentNode.querySelector(".data-txt"); if (t) t.textContent = dataNum(v); }
     if (e.type === "change") {
       if (k === "descricao") { const t = tipoDaDescricao(v); if (t && !F.fixaId) F.tipo = t; if (t === "Recebimento") F.es = "entrada"; if (t === "Empréstimo") F.es = "saida"; return pinta(); }
       if (k === "tipo" || k === "forma") { if (k === "forma" && forma(v).dono) F.pagoPor = forma(v).dono; return pinta(); }
@@ -451,6 +477,7 @@ function editarLanc(l) {
 
 /* ================= TELA: LANÇAR ================= */
 function linhaLanc(l) {
+  if (l.auto) return `<button class="tx" data-a="fixa-ver" data-v="${esc(l.auto)}"><span class="d"><span class="t">${esc(l.descricao)}</span><br><span class="s">Fixa · ${esc(forma(l.forma).nome)} · entra sozinha todo mês</span></span><span class="money">${fmt(l.valor)}</span></button>`;
   const sub = [l.tipo, forma(l.forma).nome, l.es === "saida" ? "pago por " + (forma(l.forma).dono || l.pagoPor) : "recebido por " + l.responsavel, l.responsavel !== "Casa" && l.es === "saida" ? "de " + l.responsavel : "", l.parcela ? `${l.parcela.n}/${l.parcela.total}` : "", l.observacao].filter(Boolean).join(" · ");
   return `<button class="tx" data-a="editar" data-v="${esc(l.id)}"><span class="d"><span class="t">${esc(l.descricao)}</span><br><span class="s">${esc(sub)}</span></span><span class="money ${l.es === "entrada" ? "pos" : ""}">${l.es === "entrada" ? "+" : ""}${fmt(l.valor)}</span></button>`;
 }
@@ -464,15 +491,16 @@ function vLancar() {
 /* ================= TELA: A PAGAR ================= */
 function vApagar() {
   const ym = S.ym, fixas = fixasMes(ym), hj = hoje();
-  const abertas = fixas.filter(x => !x.pago), pagas = fixas.filter(x => x.pago);
+  const noCartao = fixas.filter(x => !x.pago && ehCartao(x.f.forma)), abertas = fixas.filter(x => !x.pago && !ehCartao(x.f.forma)), pagas = fixas.filter(x => x.pago);
   const recDesc = S.cfg.descricoes.filter(d => d.tipo === "Recorrente");
-  const gastoRec = d => soma(S.base.filter(l => l.es === "saida" && l.mes === ym && norm(l.descricao) === norm(d)).map(l => l.valor));
+  const gastoRec = d => soma(S.base.filter(l => l.es === "saida" && mesDe(l) === ym && norm(l.descricao) === norm(d)).map(l => l.valor));
   const linhaFixa = x => `<div class="tx ${x.pago ? "pago" : ""}"><span class="d"><span class="t">${esc(x.f.nome)}</span><br><span class="s">vence ${dm(x.venc)} · ${x.pago ? `pago ${fmt(x.pago.valor)} por ${esc(forma(x.pago.forma).dono || x.pago.pagoPor)}` : `${fmt(x.f.valor)} · ${esc(forma(x.f.forma).nome)}${x.venc < hj ? " · <span class='neg'>atrasada</span>" : ""}`}</span></span>
     ${x.pago ? `<button class="ghost" data-a="editar" data-v="${esc(x.pago.id)}">Ver</button>` : `<button class="primary" data-a="pagar" data-v="${esc(x.f.id)}">Pagar</button>`}</div>`;
   return `<div class="stack">${navMes()}
     <details class="blk" ${ab('contasfixas')}><summary><span class="nm">Contas fixas</span><span class="money">${fmt(soma(abertas.map(x => x.f.valor)))}</span></summary>
-      <p class="hint">${abertas.length ? `${abertas.length} para pagar` : fixas.length ? "Todas pagas." : ym < (S.cfg.inicio || "") ? `As contas fixas começam em ${mesAno(S.cfg.inicio)}.` : "Nenhuma conta fixa cadastrada ainda."}</p>
+      <p class="hint">${abertas.length ? `${abertas.length} para pagar` : fixas.length ? (noCartao.length === fixas.length ? "Só contas no cartão este mês." : "Todas pagas.") : ym < (S.cfg.inicio || "") ? `As contas fixas começam em ${mesAno(S.cfg.inicio)}.` : "Nenhuma conta fixa cadastrada ainda."}</p>
       <div class="list">${abertas.map(linhaFixa).join("")}</div>
+      ${noCartao.length ? `<div class="grp">No cartão (entram sozinhas na fatura)</div><div class="list">${noCartao.map(x => `<button class="tx" data-a="fixa-ver" data-v="${esc(x.f.id)}"><span class="d"><span class="t">${esc(x.f.nome)}</span><br><span class="s">dia ${dm(x.venc)} · ${esc(forma(x.f.forma).nome)} · fatura de ${nomeMes(competencia(x.venc, x.f.forma))}</span></span><span class="money">${fmt(x.f.valor)}</span></button>`).join("")}</div>` : ""}
       ${pagas.length ? `<details style="margin-top:8px"><summary class="hint">Pagas (${pagas.length})</summary><div class="list">${pagas.map(linhaFixa).join("")}</div></details>` : ""}
       <button class="full" style="margin-top:10px" data-a="fixa-nova">+ Adicionar despesa fixa</button>
       <button class="ghost full" data-a="fixas-editar">Editar contas fixas (valor, dia, forma)</button></details>
@@ -490,9 +518,10 @@ function vDash() {
   const lista = itens => itens.length ? itens.map(p => linha(`${dm(p.d)} · ${esc(p.t)}`, fmt(p.v))).join("") : `<p class="hint">Nada ainda.</p>`;
   return `<div class="stack">${navMes()}
     ${R.fats.map(x => { const lim = +x.f.limite || 3000, pct = x.valor / lim * 100; return `<div class="panel"><div class="row between"><h3>${esc(x.f.nome)}</h3>${x.pago ? `<span class="pos">Paga por ${esc(x.pagoPor)}</span>` : `<span class="hint">vence ${dm(x.venc)}</span>`}</div>
-      <p class="hint" style="margin:2px 0 8px">Usar do ${esc(x.f.uso || "—")}</p>
+      <p class="hint" style="margin:2px 0 8px">Fecha em <strong>${dm(x.fecha)}</strong>${x.fechaMudou ? " (ajustado)" : ""} · <button class="ghost" style="padding:2px 6px;font-size:13px;text-decoration:underline" data-a="fatura-fecha" data-v="${x.f.id}">alterar</button><br>Usar do ${esc(x.f.uso || "—")}</p>
       <div class="row between" style="margin-bottom:6px"><span class="money" style="font-size:18px">${fmt(x.valor)}</span><span class="hint">de ${fmt(lim)}</span></div>${barra(pct, pct > 100 ? "bad" : pct > 85 ? "warn" : "")}
       <p class="hint" style="margin-top:6px">Soma dos lançamentos: ${fmt(x.total)} (${x.itens.length})${x.st.valor != null ? " · valor corrigido à mão" : ""}${x.emprestimos ? ` · ${fmt(x.emprestimos)} de empréstimo` : ""}</p>
+      ${x.itens.length ? `<details style="margin-top:6px" ${ab("fat-" + x.f.id)}><summary class="hint" style="cursor:pointer">Ver lançamentos da fatura (${x.itens.length})</summary><div class="list">${(() => { const dias = {}; [...x.itens].sort((a, b) => b.data.localeCompare(a.data)).forEach(l => (dias[l.data] = dias[l.data] || []).push(l)); return Object.keys(dias).map(d => `<div class="day">${dm(d)}</div>${dias[d].map(linhaLanc).join("")}`).join(""); })()}</div></details>` : ""}
       <div class="row" style="margin-top:8px"><button data-a="fatura-editar" data-v="${x.f.id}">Editar valor</button>${x.pago ? `<button class="ghost" data-a="fatura-desfaz" data-v="${x.f.id}">Desmarcar pagamento</button>` : `<button class="primary" data-a="fatura-pagar" data-v="${x.f.id}">Pagar fatura</button>`}</div></div>`; }).join("")}
     <details class="blk" ${ab('resumo')}><summary><span class="nm">Resumo</span><span class="money">${fmt(R.total)}</span></summary>
       <p class="hint" style="margin-bottom:6px">Gasto total do mês = saídas fora do cartão + A Pagar + faturas. Empréstimos ficam de fora.</p>
@@ -512,6 +541,15 @@ function vDash() {
       <div class="graf">${hist.map(x => `<div class="col"><span class="vl">${x.v ? Math.round(x.v / 100) / 10 + "k" : ""}</span><i style="height:${x.v / max * 100}%"></i><span>${nomeMes(x.m).slice(0, 3)}</span></div>`).join("")}</div></details>
   </div>`;
 }
+function editarFechamento(fid) {
+  const f = forma(fid), ym = S.ym, atual = fechaDia(f, ym), mudou = S.mes[ym]?.faturas?.[fid]?.fecha != null;
+  janela("Fechamento " + f.nome, `<div class="stack"><p class="hint">Fatura que vence em ${dm(vencNoMes(ym, f.vence))}. O dia padrão é ${f.fecha}. Mude só se o banco fechou em outro dia neste mês.</p>
+    <div class="field"><span class="lbl">Fecha no dia</span><input id="fcd" type="number" min="1" max="31" inputmode="numeric" value="${atual}"></div>
+    <div class="row">${mudou ? `<button id="fcp">Voltar ao dia ${f.fecha}</button>` : ""}<button class="primary" style="flex:1" id="fco">Salvar</button></div></div>`, (box, fechar) => {
+    const p = box.querySelector("#fcp"); if (p) p.onclick = () => { salvarMesDoc(ym, { faturas: { [fid]: { fecha: null } } }); toast("Voltou ao padrão"); fechar(); };
+    box.querySelector("#fco").onclick = () => { const d = Math.min(31, Math.max(1, +box.querySelector("#fcd").value || +f.fecha)); salvarMesDoc(ym, { faturas: { [fid]: { fecha: d === +f.fecha ? null : d } } }); toast("Fechamento salvo"); fechar(); };
+  });
+}
 function editarFatura(fid, pagar) {
   const x = faturasMes(S.ym).find(x => x.f.id === fid); if (!x) return;
   janela(pagar ? "Pagar fatura " + x.f.nome : "Valor da fatura " + x.f.nome, `<div class="stack">
@@ -530,10 +568,38 @@ function editarFatura(fid, pagar) {
 }
 
 /* ================= TELA: AJUSTES ================= */
+// nomes que o app usa nas contas (não dá para renomear nem remover)
+const TRAVADOS = { tipos: ["Fixa", "Recorrente", "Esporádica", "Parcela", "Recebimento", "Empréstimo"], responsaveis: ["Casa", "Camila", "Kaike"], pagoPor: ["Camila", "Kaike"] };
+const travado = (k, i) => (TRAVADOS[k] || []).includes(k === "descricoes" ? S.cfg.descricoes[i].nome : S.cfg[k][i]);
+function editarItemLista(k, i) {
+  const desc = k === "descricoes", velho = desc ? S.cfg.descricoes[i].nome : S.cfg[k][i];
+  janela("Editar", `<div class="stack"><div class="field"><span class="lbl">Nome</span><input id="len" value="${esc(velho)}"></div>
+    ${desc ? `<div class="field"><span class="lbl">Tipo</span><select id="let">${opcoes(S.cfg.tipos, S.cfg.descricoes[i].tipo)}</select></div>` : ""}
+    <p class="hint">Os lançamentos e contas fixas com "${esc(velho)}" passam para o nome novo.</p>
+    <button class="primary" id="leo">Salvar</button></div>`, (box, fechar) => {
+    box.querySelector("#leo").onclick = async () => {
+      const novo = box.querySelector("#len").value.trim(); if (!novo) return toast("Escreva o nome");
+      const lista = desc ? S.cfg.descricoes.map(d => d.nome) : S.cfg[k];
+      if (norm(novo) !== norm(velho) && lista.some(x => norm(x) === norm(novo))) return toast("Já existe");
+      const campo = { descricoes: "descricao", tipos: "tipo", responsaveis: "responsavel", pagoPor: "pagoPor" }[k];
+      if (desc) S.cfg.descricoes[i] = { nome: novo, tipo: box.querySelector("#let").value }; else S.cfg[k][i] = novo;
+      if (novo !== velho) {
+        if (desc) S.cfg.fixas.forEach(f => { if (f.descricao === velho) f.descricao = novo; if (f.nome === velho) f.nome = novo; });
+        if (k === "tipos") S.cfg.descricoes.forEach(d => { if (d.tipo === velho) d.tipo = novo; });
+        if (k === "responsaveis") { S.cfg.fixas.forEach(f => { if (f.responsavel === velho) f.responsavel = novo; }); S.cfg.entradas.forEach(e => { if (e.responsavel === velho) e.responsavel = novo; }); }
+        if (k === "pagoPor") S.cfg.fixas.forEach(f => { if (f.pagoPor === velho) f.pagoPor = novo; });
+        const muda = S.base.filter(l => l[campo] === velho);
+        try { for (let j = 0; j < muda.length; j += 400) { const b = writeBatch(db); muda.slice(j, j + 400).forEach(l => b.set(doc(db, "base", l.id), { [campo]: novo }, { merge: true })); await b.commit(); } } catch (e) { falha(e); }
+        toast(muda.length ? `Salvo · ${muda.length} lançamento(s) atualizado(s)` : "Salvo");
+      } else toast("Salvo");
+      salvarCfg(); fechar();
+    };
+  });
+}
 function vAjustes() {
   const c = S.cfg;
   const lista = (titulo, chave, itens, extra = "") => `<details class="blk" ${ab(chave)}><summary><span class="nm">${titulo}</span><span class="hint">${itens.length}</span></summary>${extra}
-    <div class="list">${itens.map((t, i) => `<div class="tx"><span class="d"><span class="t">${t}</span></span><button class="ghost" data-a="lista-rm" data-k="${chave}" data-v="${i}">Remover</button></div>`).join("")}</div>
+    <div class="list">${itens.map((t, i) => `<div class="tx"><span class="d"><span class="t">${t}</span></span><span class="row">${travado(chave, i) ? `<span class="hint">fixo do app</span>` : `<button class="ghost" data-a="lista-ed" data-k="${chave}" data-v="${i}">Editar</button><button class="ghost" data-a="lista-rm" data-k="${chave}" data-v="${i}">Remover</button>`}</span></div>`).join("")}</div>
     <div class="row" style="margin-top:8px"><input id="add-${chave}" placeholder="Novo item">${chave === "descricoes" ? `<select id="add-${chave}-tipo" style="max-width:140px">${opcoes(c.tipos, "Esporádica")}</select>` : ""}<button data-a="lista-add" data-k="${chave}">+ Adicionar</button></div></details>`;
   const ms = []; for (let i = -2; i <= 12; i++) ms.push(addMes(mesCasa(hoje()), i));
   return `<div class="stack"><h2>Ajustes</h2>
@@ -751,6 +817,9 @@ function acao(a, b = { dataset: {} }) {
     "lancar-rec": () => abrirForm(novoForm({ tipo: "Recorrente", descricao: v, data: ym === mesCasa(hoje()) ? hoje() : `${ym}-01` }), "Lançar " + v),
     "fatura-editar": () => editarFatura(v, false),
     "fatura-pagar": () => editarFatura(v, true),
+    "fatura-fecha": () => editarFechamento(v),
+    "fixa-ver": () => editarFixa(v),
+    "lista-ed": () => editarItemLista(k, +v),
     "fatura-desfaz": () => salvarMesDoc(ym, { faturas: { [v]: { pago: false, pagoPor: null, data: null } } }),
     "entradas-salvar": () => { const o = {}; document.querySelectorAll("[data-ent]").forEach(i => o[i.dataset.ent] = lerValor(i.value)); salvarMesDoc(ym, { entradas: o }); toast("Entradas salvas"); },
     "lista-add": () => {
@@ -761,7 +830,7 @@ function acao(a, b = { dataset: {} }) {
     },
     "lista-rm": () => {
       if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = "Confirmar"; return; }
-      S.cfg[k].splice(+v, 1); salvarCfg(); toast("Removido");
+      if (travado(k, +v)) return toast("Esse é usado pelo app"); S.cfg[k].splice(+v, 1); salvarCfg(); toast("Removido");
     },
     "forma-editar": () => editarForma(v),
     "entrada-editar": () => editarEntrada(v),
