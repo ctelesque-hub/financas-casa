@@ -494,25 +494,37 @@ function vLancar() {
 function vApagar() {
   const ym = S.ym, fixas = fixasMes(ym), hj = hoje();
   const noCartao = fixas.filter(x => !x.pago && ehCartao(x.f.forma)), abertas = fixas.filter(x => !x.pago && !ehCartao(x.f.forma)), pagas = fixas.filter(x => x.pago);
-  const recDesc = S.cfg.descricoes.filter(d => d.tipo === "Recorrente");
-  const gastoRec = d => soma(S.base.filter(l => l.es === "saida" && mesDe(l) === ym && norm(l.descricao) === norm(d)).map(l => l.valor));
   const linhaFixa = x => `<div class="tx ${x.pago ? "pago" : ""}"><span class="d"><span class="t">${esc(x.f.nome)}</span><br><span class="s">vence ${dm(x.venc)} · ${x.pago ? `pago ${fmt(x.pago.valor)} por ${esc(forma(x.pago.forma).dono || x.pago.pagoPor)}` : `${fmt(x.f.valor)} · ${esc(forma(x.f.forma).nome)}${x.venc < hj ? " · <span class='neg'>atrasada</span>" : ""}`}</span></span>
     ${x.pago ? `<button class="ghost" data-a="editar" data-v="${esc(x.pago.id)}">Ver</button>` : `<button class="primary" data-a="pagar" data-v="${esc(x.f.id)}">Pagar</button>`}</div>`;
   return `<div class="stack">${navMes()}
-    <details class="blk" ${ab('contasfixas')}><summary><span class="nm">Contas fixas</span><span class="money">${fmt(soma(abertas.map(x => x.f.valor)))}</span></summary>
+    <div class="panel"><div class="row between"><h3>Contas fixas</h3><span class="money">${fmt(soma(abertas.map(x => x.f.valor)))}</span></div>
       <p class="hint">${abertas.length ? `${abertas.length} para pagar` : fixas.length ? (noCartao.length === fixas.length ? "Só contas no cartão este mês." : "Todas pagas.") : ym < (S.cfg.inicio || "") ? `As contas fixas começam em ${mesAno(S.cfg.inicio)}.` : "Nenhuma conta fixa cadastrada ainda."}</p>
       <div class="list">${abertas.map(linhaFixa).join("")}</div>
       ${noCartao.length ? `<div class="grp">No cartão (entram sozinhas na fatura)</div><div class="list">${noCartao.map(x => `<button class="tx" data-a="fixa-ver" data-v="${esc(x.f.id)}"><span class="d"><span class="t">${esc(x.f.nome)}</span><br><span class="s">dia ${dm(x.venc)} · ${esc(forma(x.f.forma).nome)} · fatura de ${nomeMes(competencia(x.venc, x.f.forma))}</span></span><span class="money">${fmt(x.f.valor)}</span></button>`).join("")}</div>` : ""}
-      ${pagas.length ? `<details style="margin-top:8px"><summary class="hint">Pagas (${pagas.length})</summary><div class="list">${pagas.map(linhaFixa).join("")}</div></details>` : ""}
+      ${pagas.length ? `<div class="grp">Pagas</div><div class="list">${pagas.map(linhaFixa).join("")}</div>` : ""}
       <button class="full" style="margin-top:10px" data-a="fixa-nova">+ Adicionar despesa fixa</button>
-      <button class="ghost full" data-a="fixas-editar">Editar contas fixas (valor, dia, forma)</button></details>
-    <details class="blk" ${ab('contasrecorrentes')}><summary><span class="nm">Contas recorrentes</span><span class="money">${fmt(soma(recDesc.map(d => gastoRec(d.nome))))}</span></summary>
-      <p class="hint">Quanto já foi gasto em ${nomeMes(ym)}. Toque para lançar.</p>
-      <div class="list">${recDesc.map(d => `<button class="tx" data-a="lancar-rec" data-v="${esc(d.nome)}"><span class="d"><span class="t">${esc(d.nome)}</span></span><span class="money">${fmt(gastoRec(d.nome))}</span></button>`).join("")}</div></details>
+      <button class="ghost full" data-a="fixas-editar">Editar contas fixas (valor, dia, forma)</button></div>
   </div>`;
 }
 
 /* ================= TELA: DASH ================= */
+// quadro Fixas do Dash: fixa no cartão conta como paga quando a fatura dela é paga
+function fixasResumo(ym) {
+  let total = 0, pago = 0;
+  fixasMes(ym).forEach(x => {
+    const v = x.pago ? +x.pago.valor : +x.f.valor || 0; total += v;
+    const cartao = ehCartao(x.pago ? x.pago.forma : x.f.forma);
+    if (cartao) { const fm = competencia(x.pago ? x.pago.data : x.venc, x.pago ? x.pago.forma : x.f.forma); if (S.mes[fm]?.faturas?.[x.pago ? x.pago.forma : x.f.forma]?.pago) pago += v; }
+    else if (x.pago) pago += v;
+  });
+  return { total: r2(total), pago: r2(pago), falta: r2(total - pago) };
+}
+function blocoTipo(ym, tipo, chave, titulo = tipo) {
+  const ls = S.base.filter(l => l.es === "saida" && l.tipo === tipo && mesDe(l) === ym).sort((a, b) => b.data.localeCompare(a.data));
+  const dias = {}; ls.forEach(l => (dias[l.data] = dias[l.data] || []).push(l));
+  return `<details class="blk" ${ab(chave)}><summary><span class="nm">${titulo}</span><span class="money">${fmt(soma(ls.map(l => l.valor)))}</span></summary>
+    <div class="list">${ls.length ? Object.keys(dias).map(d => `<div class="day">${dm(d)}</div>${dias[d].map(linhaLanc).join("")}`).join("") : `<p class="hint">Nada lançado.</p>`}</div></details>`;
+}
 function vDash() {
   const ym = S.ym, R = resumo(ym), rc = recebiveis();
   const meses = []; for (let k = 5; k >= 0; k--) meses.push(addMes(ym, -k));
@@ -541,6 +553,8 @@ function vDash() {
         ${x.itens.map(l => linha(`${dm(l.data)} · ${ehEmprestimo(l) ? "Emprestado" : "Devolvido"}${l.observacao ? " · " + esc(l.observacao) : ""}`, (ehEmprestimo(l) ? "" : "− ") + fmt(l.valor))).join("")}</details>`).join("") : `<p class="hint">Nenhum empréstimo lançado.</p>`}</details>
     <details class="blk" ${ab('comparativo')}><summary><span class="nm">Comparativo</span><span class="hint">gasto por mês</span></summary>
       <div class="graf">${hist.map(x => `<div class="col"><span class="vl">${x.v ? Math.round(x.v / 100) / 10 + "k" : ""}</span><i style="height:${x.v / max * 100}%"></i><span>${nomeMes(x.m).slice(0, 3)}</span></div>`).join("")}</div></details>
+    ${(() => { const F = fixasResumo(ym); return `<details class="blk" ${ab('dfixas')}><summary><span class="nm">Fixas</span><span class="money">${fmt(F.total)}</span></summary>${linha("Total", fmt(F.total))}${linha("Pago", fmt(F.pago))}${linha("Falta", fmt(F.falta), true)}</details>`; })()}
+    ${blocoTipo(ym, "Recorrente", "drec")}${blocoTipo(ym, "Esporádica", "desp", "Esporádico")}
   </div>`;
 }
 function editarFechamento(fid) {
